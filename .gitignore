@@ -1,0 +1,33 @@
+
+.databricks
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb.bak
+
+# Prefer .py pipeline sources; keep notebooks local by default
+scripts/**/*.ipynb
+skripts/**/*.ipynb
+Daten/**/*.ipynb
+
+# Generated notebook runs (papermill outputs)
+data/gold/papermill_outputs/
+skripts/papermill_outputs/
+
+# Pipeline outputs / local datasets (keep repo small)
+data/silver/
+data/gold/
+
+# Bronze data: commit CSVs only (no caches/logs)
+data/bronze/dwd/recents/
+data/bronze/**/*.meta.json
+data/bronze/**/*.log
+data/bronze/**/.DS_Store
