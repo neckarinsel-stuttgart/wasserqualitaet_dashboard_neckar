@@ -18,6 +18,10 @@ scripts/**/*.ipynb
 skripts/**/*.ipynb
 Daten/**/*.ipynb
 
+# Legacy folders (deprecated; keep local only)
+skripts/
+Daten/
+
 # Generated notebook runs (papermill outputs)
 data/gold/papermill_outputs/
 skripts/papermill_outputs/
