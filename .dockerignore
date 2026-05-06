@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+.ipynb_checkpoints
+*.pyc
+
+# Don't bake local datasets into images (mounted at runtime)
+data
+
+# Keep images clean
+Daten
+skripts
