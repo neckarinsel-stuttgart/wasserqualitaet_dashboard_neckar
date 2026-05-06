@@ -23,6 +23,10 @@ train = [
 mlflow = [
   "mlflow>=2.0",
 ]
+api = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.5",

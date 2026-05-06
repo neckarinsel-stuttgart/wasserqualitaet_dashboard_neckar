@@ -1,0 +1,19 @@
+# Playwright base image includes browsers + system deps.
+# If you need full reproducibility, pin this tag to a specific Playwright version.
+FROM mcr.microsoft.com/playwright/python:latest
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN pip install --no-cache-dir -U pip setuptools wheel
+
+# Install internal pipeline package (shared path/env helpers) + requests for DWD.
+COPY pipeline/ ./pipeline/
+RUN pip install --no-cache-dir ./pipeline requests
+
+# Copy step scripts.
+COPY scripts/ ./scripts/
+COPY tools/ ./tools/
+
+# Default command is provided by docker-compose.yml

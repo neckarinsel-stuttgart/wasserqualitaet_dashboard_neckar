@@ -1,0 +1,58 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pipeline
+      args:
+        PIPELINE_EXTRAS: "api"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "ni_ai_pipeline.api_app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  crawl_dwd:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.crawler
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    command: ["python", "scripts/bronze/crawl_dwd.py"]
+
+  crawl_lubw:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.crawler
+    env_file:
+      - .env
+    environment:
+      # Set to 0 if you want to watch the browser (requires a GUI-capable runtime)
+      LUBW_HEADLESS: "1"
+      # Optional tuning
+      LUBW_EXPORT_RETRIES: "3"
+      LUBW_DOWNLOAD_TIMEOUT_MS: "120000"
+    volumes:
+      - ./data:/app/data
+    command: ["python", "scripts/bronze/crawl_lubw.py"]
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pipeline
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    # Silver + Gold only (assumes bronze already exists)
+    command:
+      - sh
+      - -c
+      - >-
+        python scripts/silver/clean_dwd_daten.py
+        && python scripts/silver/create_messungen_complete.py
+        && python scripts/gold/data_full.py
+        && python scripts/gold/create_masterdata.py
