@@ -11,7 +11,12 @@ services:
       - ./data:/app/data
     ports:
       - "8000:8000"
-    command: ["uvicorn", "ni_ai_pipeline.api_app:app", "--host", "0.0.0.0", "--port", "8000"]
+    command:
+      - sh
+      - -c
+      - >-
+        pip install --no-cache-dir -r /app/requirements.txt
+        && uvicorn ni_ai_pipeline.api_app:app --host 0.0.0.0 --port 8000
 
   crawl_dwd:
     build:
@@ -21,7 +26,12 @@ services:
       - .env
     volumes:
       - ./data:/app/data
-    command: ["python", "scripts/bronze/crawl_dwd.py"]
+    command:
+      - sh
+      - -c
+      - >-
+        pip install --no-cache-dir -r /app/requirements.txt
+        && python scripts/bronze/crawl_dwd.py
 
   crawl_lubw:
     build:
@@ -37,7 +47,13 @@ services:
       LUBW_DOWNLOAD_TIMEOUT_MS: "120000"
     volumes:
       - ./data:/app/data
-    command: ["python", "scripts/bronze/crawl_lubw.py"]
+    command:
+      - sh
+      - -c
+      - >-
+        pip install --no-cache-dir -r /app/requirements.txt
+        && python -m playwright install chromium
+        && python scripts/bronze/crawl_lubw.py
 
   pipeline:
     build:
@@ -52,7 +68,8 @@ services:
       - sh
       - -c
       - >-
-        python scripts/silver/clean_dwd_daten.py
+        pip install --no-cache-dir -r /app/requirements.txt
+        && python scripts/silver/clean_dwd_daten.py
         && python scripts/silver/create_messungen_complete.py
         && python scripts/gold/data_full.py
         && python scripts/gold/create_masterdata.py

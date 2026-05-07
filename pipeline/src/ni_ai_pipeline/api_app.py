@@ -39,7 +39,7 @@ REQUESTED: list[str] = [
 
 ALIASES: dict[str, str] = {
     # common typos / casing
-    "FD_LBERG_MEAN": "FD_LBERG_mean",
+    "FD_LBERG_MEAN": "FD_LBERG_mean",  
     "tim_since_last_rain_1mm": "time_since_last_rain_1mm",
     "air_temp_CCD_7d": "air_temp_CDD_7d",
     # temperature naming variants
