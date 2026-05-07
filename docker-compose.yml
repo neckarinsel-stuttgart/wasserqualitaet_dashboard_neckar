@@ -9,6 +9,7 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      - ./requirements.txt:/app/requirements.txt:ro
     ports:
       - "8000:8000"
     command:
@@ -26,6 +27,7 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      - ./requirements.txt:/app/requirements.txt:ro
     command:
       - sh
       - -c
@@ -47,6 +49,7 @@ services:
       LUBW_DOWNLOAD_TIMEOUT_MS: "120000"
     volumes:
       - ./data:/app/data
+      - ./requirements.txt:/app/requirements.txt:ro
     command:
       - sh
       - -c
@@ -63,6 +66,7 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      - ./requirements.txt:/app/requirements.txt:ro
     # Silver + Gold only (assumes bronze already exists)
     command:
       - sh
