@@ -1,0 +1,9 @@
+# Shared runtime deps for docker-compose services.
+# Installed on container startup (see docker-compose.yml).
+
+# Internal package (provides numpy/pandas/python-dotenv and (via extra) FastAPI bits)
+./pipeline[api]
+
+# Crawlers
+requests>=2.31
+playwright>=1.44

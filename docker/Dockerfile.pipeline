@@ -6,6 +6,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 ARG PIPELINE_EXTRAS=""
 
+COPY requirements.txt ./requirements.txt
+
 # Install only what the silver/gold pipeline needs.
 RUN pip install --no-cache-dir -U pip setuptools wheel
 
