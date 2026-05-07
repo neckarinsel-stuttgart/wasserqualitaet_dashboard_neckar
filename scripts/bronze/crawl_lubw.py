@@ -96,11 +96,73 @@ async def choose_kreise(page) -> None:
     """Wählt die gewünschten Kreise im Select2-Filter aus."""
     print("🔎 Wähle Kreise:", KREISE)
 
-    await page.wait_for_selector("input.select2-search__field", timeout=15000)
+    await page.wait_for_load_state("domcontentloaded")
+
+    # Optional: dismiss common consent/overlay buttons if present.
+    for btn_sel in [
+        "button:has-text('Akzeptieren')",
+        "button:has-text('Zustimmen')",
+        "button:has-text('Accept')",
+        "button:has-text('Agree')",
+    ]:
+        try:
+            btn = page.locator(btn_sel).first
+            if await btn.count():
+                await btn.click(timeout=1500)
+                await page.wait_for_timeout(250)
+                break
+        except Exception:
+            pass
+
+    async def _open_select2_dropdown() -> None:
+        # The search input exists in the DOM but is often hidden until the dropdown is opened.
+        try:
+            any_field = page.locator("input.select2-search__field").first
+            if await any_field.count():
+                described_by = await any_field.get_attribute("aria-describedby")
+                if described_by:
+                    await page.locator(f"#{described_by}").click(timeout=5000)
+                    return
+        except Exception:
+            pass
+
+        # Fallbacks: click the first available Select2 container/selection.
+        for sel in [
+            ".select2-container:visible",
+            "span.select2-selection:visible",
+            ".select2-selection--multiple:visible",
+            ".select2-selection--single:visible",
+            ".select2-container",
+            "span.select2-selection",
+        ]:
+            try:
+                loc = page.locator(sel).first
+                if await loc.count():
+                    await loc.scroll_into_view_if_needed(timeout=5000)
+                    await loc.click(timeout=5000)
+                    return
+            except Exception:
+                continue
+
+    # Try a few times to ensure a *visible* select2 search field.
+    last_exc: BaseException | None = None
+    for _ in range(5):
+        try:
+            await _open_select2_dropdown()
+            await page.wait_for_selector("input.select2-search__field:visible", timeout=15000)
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            await page.wait_for_timeout(500)
+    if last_exc is not None:
+        raise last_exc
 
     for kreis in KREISE:
-        await page.click("input.select2-search__field")
-        await page.fill("input.select2-search__field", kreis)
+        # Always use the visible field (there may be multiple hidden ones in the DOM).
+        field = page.locator("input.select2-search__field:visible").first
+        await field.click(timeout=10000)
+        await field.fill(kreis, timeout=10000)
         await page.wait_for_selector(".select2-results__option", timeout=5000)
         await page.locator(".select2-results__option", has_text=kreis).click()
         await page.wait_for_timeout(400)

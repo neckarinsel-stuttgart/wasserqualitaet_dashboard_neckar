@@ -28,6 +28,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./requirements.txt:/app/requirements.txt:ro
+      - ./scripts:/app/scripts:ro
     command:
       - sh
       - -c
@@ -50,6 +51,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./requirements.txt:/app/requirements.txt:ro
+      - ./scripts:/app/scripts:ro
     command:
       - sh
       - -c
@@ -67,6 +69,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./requirements.txt:/app/requirements.txt:ro
+      - ./scripts:/app/scripts:ro
     # Silver + Gold only (assumes bronze already exists)
     command:
       - sh
