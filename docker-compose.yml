@@ -77,3 +77,4 @@ services:
         && python scripts/silver/create_messungen_complete.py
         && python scripts/gold/data_full.py
         && python scripts/gold/create_masterdata.py
+        && ni-ai-pipeline gold-daily-dataset
