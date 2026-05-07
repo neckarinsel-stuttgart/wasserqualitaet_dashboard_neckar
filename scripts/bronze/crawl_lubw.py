@@ -113,14 +113,31 @@ async def set_datum_filter(page) -> None:
     current_year = datetime.now().year
     date_range = f"2024 - {current_year}"
 
-    date_input = page.locator(
-        "textarea.d-condition-date-picker--input.form-control[placeholder='yyyy - yyyy']"
-    ).first
-    await date_input.scroll_into_view_if_needed()
-    await date_input.wait_for(state="visible", timeout=10000)
-    await date_input.fill(date_range)
-    await date_input.press("Enter")
-    print(f"✔ Datum gesetzt: {date_range}")
+    selector = "textarea.d-condition-date-picker--input.form-control[placeholder='yyyy - yyyy']"
+
+    # The dashboard re-renders parts of the filter UI after interactions.
+    # This can detach the textarea between locating it and scrolling/filling.
+    last_exc: BaseException | None = None
+    for attempt in range(1, 6):
+        date_input = page.locator(selector).first
+        try:
+            await date_input.wait_for(state="visible", timeout=15000)
+            await date_input.scroll_into_view_if_needed(timeout=10000)
+            await date_input.fill(date_range)
+            await date_input.press("Enter")
+            print(f"✔ Datum gesetzt: {date_range}")
+            return
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc)
+            if "not attached" in msg.lower() or "detached" in msg.lower():
+                # Give the UI a moment to settle, then re-locate and retry.
+                await page.wait_for_timeout(500)
+                continue
+            raise
+
+    assert last_exc is not None
+    raise last_exc
 
 
 async def export_csv(page) -> None:
