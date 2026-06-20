@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import json
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -84,6 +85,62 @@ class ModelResult:
     holdout_r2: float
 
 
+def _build_model_metadata(
+    *,
+    target: str,
+    feature_columns: list[str],
+    dropped_entro_columns: list[str],
+    dropped_non_feature_columns: list[str],
+    best_model_name: str,
+    data_path: Path,
+) -> dict[str, Any]:
+    return {
+        "target": target,
+        "feature_columns": feature_columns,
+        "dropped_entro_columns": dropped_entro_columns,
+        "dropped_non_feature_columns": dropped_non_feature_columns,
+        "best_model": best_model_name,
+        "training_data_path": str(data_path),
+    }
+
+
+def load_saved_model(model_path: Path) -> Any:
+    """Load a previously saved sklearn-compatible model pipeline."""
+
+    with open(model_path, "rb") as f:
+        return pickle.load(f)
+
+
+def load_model_metadata(metadata_path: Path) -> dict[str, Any]:
+    """Load JSON metadata stored with a trained model artifact."""
+
+    return json.loads(metadata_path.read_text(encoding="utf-8"))
+
+
+def predict_with_saved_model(
+    model: Any,
+    features: pd.DataFrame,
+    *,
+    metadata: dict[str, Any],
+) -> np.ndarray:
+    """Predict with a saved model while enforcing saved feature order/schema.
+
+    Missing features are added as NaN so the model's imputer can handle them.
+    """
+
+    expected = [str(c) for c in metadata.get("feature_columns", [])]
+    if not expected:
+        raise ValueError("Model metadata does not contain feature_columns.")
+
+    x = features.copy()
+    for c in expected:
+        if c not in x.columns:
+            x[c] = np.nan
+
+    x = x[expected]
+    return np.asarray(model.predict(x), dtype=float)
+
+
 def train_ecoli_predictability(
     paths: PathConfig,
     *,
@@ -93,6 +150,9 @@ def train_ecoli_predictability(
     test_fraction: float = 0.2,
     log_target: bool = False,
     export_ecoli_only: bool = False,
+    save_model: bool = True,
+    model_path: Path | None = None,
+    model_metadata_path: Path | None = None,
     mlflow_enabled: bool = False,
     mlflow_experiment: str = "ni-ai",
     mlflow_run_name: str | None = None,
@@ -298,6 +358,29 @@ def train_ecoli_predictability(
     print(f"Wrote: {report_path}")
     print(f"Wrote: {results_path}")
     print(f"Wrote: {importances_path}")
+
+    if save_model:
+        model_path = model_path or (out_dir / "ecoli_model.pkl")
+        model_metadata_path = model_metadata_path or (out_dir / "ecoli_model_metadata.json")
+
+        with open(model_path, "wb") as f:
+            pickle.dump(best_pipe, f)
+
+        model_metadata = _build_model_metadata(
+            target=target,
+            feature_columns=list(map(str, x.columns)),
+            dropped_entro_columns=dropped_entro_cols,
+            dropped_non_feature_columns=base_drop + [target],
+            best_model_name=best.name,
+            data_path=data_path,
+        )
+        model_metadata_path.write_text(
+            json.dumps(model_metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        print(f"Wrote: {model_path}")
+        print(f"Wrote: {model_metadata_path}")
 
     if mlflow_enabled:
         try:

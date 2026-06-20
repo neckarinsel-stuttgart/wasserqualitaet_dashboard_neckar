@@ -208,8 +208,27 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     return df
 
 
+def _prediction_value_to_bool(value: Any, *, threshold: float = 0.5) -> bool:
+    """Convert prediction table values to boolean in a tolerant way."""
+
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"true", "t", "yes", "y", "1"}:
+            return True
+        if token in {"false", "f", "no", "n", "0"}:
+            return False
+
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        raise ValueError(f"Could not convert prediction value to bool: {value!r}")
+    return bool(float(numeric) >= float(threshold))
+
+
 def create_app() -> FastAPI:
-    # Expose exactly the two endpoints below (no auto docs/openapi routes).
+    # Expose API endpoints only via explicit routes (no auto docs/openapi routes).
     app = FastAPI(
         title="NI_AI API",
         version="0.1.0",
@@ -272,6 +291,79 @@ def create_app() -> FastAPI:
             media_type="text/csv",
             filename="masterdata.csv",
         )
+
+    @app.get("/get_daily_prediction")
+    def get_daily_prediction() -> dict[str, Any]:
+        """Return latest prediction as boolean + current-day freshness flag."""
+
+        paths = get_paths(load_dotenv=True)
+        predictions_path = paths.gold_datasets_dir / "predictions.csv"
+        if not predictions_path.exists():
+            raise HTTPException(status_code=404, detail=f"Not found: {predictions_path}")
+
+        try:
+            df = pd.read_csv(predictions_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"No rows in: {predictions_path}")
+
+        if paths.site_id is not None and "site_id" in df.columns:
+            df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
+            if df.empty:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No prediction rows for site_id={paths.site_id}",
+                )
+
+        if "prediction_date" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="predictions.csv is missing required column: prediction_date",
+            )
+        if "prediction" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="predictions.csv is missing required column: prediction",
+            )
+
+        df["prediction_date"] = pd.to_datetime(
+            df["prediction_date"], errors="coerce"
+        ).dt.tz_localize(None)
+        df = df.dropna(subset=["prediction_date"])
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No valid prediction_date rows found")
+
+        sort_cols = ["prediction_date"]
+        if "created_at_utc" in df.columns:
+            df["created_at_utc"] = pd.to_datetime(df["created_at_utc"], errors="coerce", utc=True)
+            sort_cols.append("created_at_utc")
+
+        latest = df.sort_values(sort_cols).iloc[-1]
+
+        try:
+            prediction_bool = _prediction_value_to_bool(latest["prediction"])
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        latest_date = pd.Timestamp(latest["prediction_date"]).normalize()
+        today = pd.Timestamp.now().normalize()
+        is_current_day = bool(latest_date == today)
+
+        payload: dict[str, Any] = {
+            "prediction": prediction_bool,
+            "is_current_day": is_current_day,
+        }
+
+        if "prediction_date" in latest.index:
+            payload["prediction_date"] = pd.Timestamp(latest["prediction_date"]).strftime("%Y-%m-%d")
+        if "site_id" in latest.index:
+            payload["site_id"] = str(latest["site_id"])
+        if "target" in latest.index:
+            payload["target"] = str(latest["target"])
+
+        return payload
 
     return app
 
