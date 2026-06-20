@@ -227,6 +227,22 @@ def _prediction_value_to_bool(value: Any, *, threshold: float = 0.5) -> bool:
     return bool(float(numeric) >= float(threshold))
 
 
+def _json_compatible_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (np.bool_, bool)):
+        return bool(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        if np.isnan(value) or np.isinf(value):
+            return None
+        return float(value)
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    return value
+
+
 def create_app() -> FastAPI:
     # Expose API endpoints only via explicit routes (no auto docs/openapi routes).
     app = FastAPI(
@@ -362,6 +378,76 @@ def create_app() -> FastAPI:
             payload["site_id"] = str(latest["site_id"])
         if "target" in latest.index:
             payload["target"] = str(latest["target"])
+
+        return payload
+
+    @app.get("/get_current_weather")
+    def get_current_weather() -> dict[str, Any]:
+        """Return Stuttgart weather row for the current local hour."""
+
+        paths = get_paths(load_dotenv=True)
+        weather_path = paths.gold_datasets_dir / "stuttgart_weather.csv"
+        if not weather_path.exists():
+            raise HTTPException(status_code=404, detail=f"Not found: {weather_path}")
+
+        try:
+            df = pd.read_csv(weather_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"No rows in: {weather_path}")
+
+        if "weather_time_local" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="stuttgart_weather.csv is missing required column: weather_time_local",
+            )
+
+        if paths.site_id is not None and "site_id" in df.columns:
+            df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
+            if df.empty:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No weather rows for site_id={paths.site_id}",
+                )
+
+        timezone = "Europe/Berlin"
+        if "timezone" in df.columns:
+            tz_values = df["timezone"].dropna().astype(str)
+            if not tz_values.empty:
+                timezone = tz_values.iloc[-1]
+
+        now_local_hour = pd.Timestamp.now(tz=timezone).tz_localize(None).replace(
+            minute=0, second=0, microsecond=0
+        )
+
+        df["weather_time_local"] = pd.to_datetime(df["weather_time_local"], errors="coerce")
+        df = df.dropna(subset=["weather_time_local"])
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No valid weather_time_local rows found")
+
+        current_rows = df.loc[df["weather_time_local"] == now_local_hour].copy()
+        if current_rows.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No weather row for current hour: {now_local_hour.strftime('%Y-%m-%d %H:00:00')}",
+            )
+
+        sort_cols = ["weather_time_local"]
+        if "created_at_utc" in current_rows.columns:
+            current_rows["created_at_utc"] = pd.to_datetime(
+                current_rows["created_at_utc"], errors="coerce", utc=True
+            )
+            sort_cols.append("created_at_utc")
+
+        latest = current_rows.sort_values(sort_cols).iloc[-1]
+
+        payload = {
+            str(k): _json_compatible_value(v)
+            for k, v in latest.to_dict().items()
+        }
+        payload["weather_time_local"] = now_local_hour.strftime("%Y-%m-%d %H:%M:%S")
 
         return payload
 
