@@ -78,6 +78,7 @@ services:
       - -c
       - >-
         pip install --no-cache-dir -r /app/requirements.txt
+        && pip install --no-cache-dir ./pipeline[train]
         && python scripts/silver/clean_dwd_daten.py
         && python scripts/silver/create_messungen_complete.py
         && python scripts/gold/data_full.py
