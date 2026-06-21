@@ -64,6 +64,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.pipeline
+      args:
+        PIPELINE_EXTRAS: "train"
     env_file:
       - .env
     volumes:
