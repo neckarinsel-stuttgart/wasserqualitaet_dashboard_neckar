@@ -81,3 +81,6 @@ services:
         && python scripts/gold/data_full.py
         && python scripts/gold/create_masterdata.py
         && ni-ai-pipeline gold-daily-dataset
+        && ni-ai-pipeline stuttgart-weather-hourly
+        && if [ ! -f /app/data/gold/datasets/ecoli_model.pkl ] || [ ! -f /app/data/gold/datasets/ecoli_model_metadata.json ]; then ni-ai-pipeline train-ecoli; fi
+        && ni-ai-pipeline predict-daily

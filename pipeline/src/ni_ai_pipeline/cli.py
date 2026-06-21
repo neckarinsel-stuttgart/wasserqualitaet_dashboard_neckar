@@ -160,6 +160,9 @@ def main() -> int:
     args = _parse_args()
     paths = get_paths(load_dotenv=True)
 
+    default_model_path = paths.gold_datasets_dir / "ecoli_model.pkl"
+    default_model_metadata_path = paths.gold_datasets_dir / "ecoli_model_metadata.json"
+
     if args.cmd == "silver-weather":
         build_silver_weather(paths)
         return 0
@@ -211,11 +214,22 @@ def main() -> int:
         return 0
 
     if args.cmd == "predict-daily":
+        # Bootstrap model artifacts on first deployment when default paths are used.
+        model_path = args.model_path or default_model_path
+        model_metadata_path = args.model_metadata_path or default_model_metadata_path
+        if args.model_path is None and args.model_metadata_path is None:
+            if (not model_path.exists()) or (not model_metadata_path.exists()):
+                print(
+                    "Model artifacts missing; training once before first prediction "
+                    f"({model_path}, {model_metadata_path})."
+                )
+                train_ecoli_predictability(paths)
+
         predict_latest_and_upsert(
             paths,
             features_path=args.features_data,
-            model_path=args.model_path,
-            model_metadata_path=args.model_metadata_path,
+            model_path=model_path,
+            model_metadata_path=model_metadata_path,
             predictions_path=args.predictions_path,
             horizon_days=args.horizon_days,
             upsert=(not args.append_only),
@@ -236,6 +250,12 @@ def main() -> int:
         build_data_full(paths)
         build_masterdata_daily(paths)
         build_daily_gold_dataset(paths)
+        if (not default_model_path.exists()) or (not default_model_metadata_path.exists()):
+            print(
+                "Model artifacts missing; training once before first prediction "
+                f"({default_model_path}, {default_model_metadata_path})."
+            )
+            train_ecoli_predictability(paths)
         predict_latest_and_upsert(paths)
         return 0
 
