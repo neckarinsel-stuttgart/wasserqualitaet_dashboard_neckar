@@ -15,9 +15,32 @@ def _clean_value(val: object) -> float:
         return float("nan")
 
 
+def _normalize_column_name(col: object) -> str:
+    # Strip UTF-8 BOM and whitespace to handle files saved with BOM headers.
+    return str(col).replace("\ufeff", "").strip()
+
+
+def _parse_measurement_dates(series: pd.Series) -> pd.Series:
+    raw = series.astype(str).str.strip()
+    parsed = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+
+    # ISO-like timestamps (e.g. 2024-05-13 08:00:00)
+    iso_mask = raw.str.match(r"^\d{4}-\d{2}-\d{2}", na=False)
+    if iso_mask.any():
+        parsed.loc[iso_mask] = pd.to_datetime(raw.loc[iso_mask], errors="coerce", dayfirst=False)
+
+    # German-style dates (e.g. 06.05.2025)
+    non_iso_mask = ~iso_mask
+    if non_iso_mask.any():
+        parsed.loc[non_iso_mask] = pd.to_datetime(raw.loc[non_iso_mask], errors="coerce", dayfirst=True)
+
+    return parsed
+
+
 def _read_tidy_measurements(csv_path: pd.io.common.FilePath) -> pd.DataFrame:
     """Read row-wise measurements with columns DATUM/ecoli/entro."""
     df_raw = pd.read_csv(csv_path, sep=None, engine="python")
+    df_raw.columns = [_normalize_column_name(c) for c in df_raw.columns]
 
     columns_lower = {str(col).strip().lower(): col for col in df_raw.columns}
     required_cols = ["datum", "ecoli", "entro"]
@@ -34,7 +57,7 @@ def _read_tidy_measurements(csv_path: pd.io.common.FilePath) -> pd.DataFrame:
 
     out = pd.DataFrame(
         {
-            "datum": pd.to_datetime(df_raw[datum_col], errors="coerce", dayfirst=True),
+            "datum": _parse_measurement_dates(df_raw[datum_col]),
             "ecoli": df_raw[ecoli_col].map(_clean_value),
             "entro": df_raw[entro_col].map(_clean_value),
         }
