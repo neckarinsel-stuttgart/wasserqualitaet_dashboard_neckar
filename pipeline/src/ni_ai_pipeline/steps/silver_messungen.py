@@ -77,6 +77,69 @@ def _clean_value(val: object) -> float:
         return float("nan")
 
 
+def _norm_token(value: object) -> str:
+    return str(value).strip().lower().replace("_", "")
+
+
+def _pick_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    normalized = {_norm_token(c): c for c in df.columns}
+    for cand in candidates:
+        key = _norm_token(cand)
+        if key in normalized:
+            return normalized[key]
+    return None
+
+
+def _build_2024_from_tidy(df_raw: pd.DataFrame) -> pd.DataFrame:
+    date_col = _pick_existing_column(df_raw, ["DATUM", "datum", "date"])
+    ecoli_col = _pick_existing_column(df_raw, ["ecoli", "e_coli", "e. coli", "e.coli"])
+    entro_col = _pick_existing_column(df_raw, ["entro", "enterokokken", "enterococcus"])
+
+    if date_col is None or ecoli_col is None or entro_col is None:
+        raise KeyError(
+            "Could not detect tidy measurement columns for 2024. "
+            f"Columns found: {list(df_raw.columns)}"
+        )
+
+    out = pd.DataFrame(
+        {
+            "datum": pd.to_datetime(df_raw[date_col], errors="coerce", dayfirst=False),
+            "ecoli": df_raw[ecoli_col].map(_clean_value),
+            "entro": df_raw[entro_col].map(_clean_value),
+        }
+    )
+    return out.dropna(subset=["datum"])
+
+
+def _build_2024_from_wide(df_raw: pd.DataFrame) -> pd.DataFrame:
+    idx_lookup = {_norm_token(i): i for i in df_raw.index}
+
+    ecoli_idx = idx_lookup.get(_norm_token("E. Coli")) or idx_lookup.get(_norm_token("E.Coli"))
+    entro_idx = idx_lookup.get(_norm_token("Enterokokken"))
+
+    if ecoli_idx is None or entro_idx is None:
+        raise KeyError(
+            "Could not detect wide measurement rows for 2024. "
+            f"Index labels found: {list(df_raw.index)}"
+        )
+
+    dates_2024: list[pd.Timestamp] = []
+    for col in df_raw.columns:
+        dates_2024.append(_parse_german_short_date(str(col)))
+
+    ecoli_2024 = df_raw.loc[ecoli_idx].values
+    entro_2024 = df_raw.loc[entro_idx].values
+
+    out = pd.DataFrame(
+        {
+            "datum": dates_2024,
+            "ecoli": [_clean_value(v) for v in ecoli_2024],
+            "entro": [_clean_value(v) for v in entro_2024],
+        }
+    )
+    return out.dropna(subset=["datum"])
+
+
 def build_messungen_komplett(paths: PathConfig) -> pd.DataFrame:
     """Create Silver measurement table from the 2024/2025 Bronze measurement inputs."""
 
@@ -90,22 +153,25 @@ def build_messungen_komplett(paths: PathConfig) -> pd.DataFrame:
             "Put files under data/bronze/messungen (or set BRONZE_MESSUNGEN_DIR/DATA_BRONZE)."
         )
 
-    df_2024_raw = pd.read_csv(paths.bronze_messungen_dir / "messungen_2024.csv", sep=";", index_col=0)
+    df_2024_raw = pd.read_csv(
+        paths.bronze_messungen_dir / "messungen_2024.csv",
+        sep=None,
+        engine="python",
+    )
 
-    dates_2024: list[pd.Timestamp] = []
-    for col in df_2024_raw.columns:
-        dates_2024.append(_parse_german_short_date(str(col)))
-
-    ecoli_2024 = df_2024_raw.loc["E. Coli"].values
-    entro_2024 = df_2024_raw.loc["Enterokokken"].values
-
-    df_2024 = pd.DataFrame(
-        {
-            "datum": dates_2024,
-            "ecoli": [_clean_value(v) for v in ecoli_2024],
-            "entro": [_clean_value(v) for v in entro_2024],
-        }
-    ).dropna(subset=["datum"])
+    # 2024 arrives in two known shapes:
+    # 1) legacy wide matrix (E. Coli/Enterokokken as index rows),
+    # 2) tidy rows with datum/ecoli/entro columns.
+    tidy_date_col = _pick_existing_column(df_2024_raw, ["DATUM", "datum", "date"])
+    if tidy_date_col is not None:
+        df_2024 = _build_2024_from_tidy(df_2024_raw)
+    else:
+        df_2024_wide = pd.read_csv(
+            paths.bronze_messungen_dir / "messungen_2024.csv",
+            sep=";",
+            index_col=0,
+        )
+        df_2024 = _build_2024_from_wide(df_2024_wide)
 
     df_2025_raw = pd.read_csv(paths.bronze_messungen_dir / "messungen_2025.csv", sep=";")
     if "DATUM" not in df_2025_raw.columns:
