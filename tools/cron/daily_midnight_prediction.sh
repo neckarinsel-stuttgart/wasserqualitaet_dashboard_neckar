@@ -8,6 +8,8 @@ if command -v ni-ai-pipeline >/dev/null 2>&1; then
   ni-ai-pipeline run-daily-midnight
 elif [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
   "$REPO_ROOT/.venv/bin/python" -m ni_ai_pipeline.cli run-daily-midnight
+elif [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
+  "$REPO_ROOT/.venv/bin/python3" -m ni_ai_pipeline.cli run-daily-midnight
 else
-  python -m ni_ai_pipeline.cli run-daily-midnight
+  /usr/bin/python3 -m ni_ai_pipeline.cli run-daily-midnight
 fi
