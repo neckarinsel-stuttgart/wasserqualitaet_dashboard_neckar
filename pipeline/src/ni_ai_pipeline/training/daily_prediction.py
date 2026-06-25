@@ -84,6 +84,12 @@ def predict_latest_and_upsert(
     best_model = str(metadata.get("best_model", "unknown"))
     row_site_id = str(latest.get("site_id", pd.Series([paths.site_id])).iloc[0])
 
+    raw_prediction = predictions[0]
+    if isinstance(raw_prediction, (bool, np.bool_)):
+        prediction_bool = bool(raw_prediction)
+    else:
+        prediction_bool = bool(pd.to_numeric(pd.Series([raw_prediction]), errors="coerce").iloc[0] >= 0.5)
+
     record = pd.DataFrame(
         [
             {
@@ -91,7 +97,7 @@ def predict_latest_and_upsert(
                 "target": target_name,
                 "feature_date": pd.Timestamp(feature_date_ts).strftime("%Y-%m-%d"),
                 "prediction_date": prediction_date_ts.strftime("%Y-%m-%d"),
-                "prediction": float(np.asarray(predictions, dtype=float)[0]),
+                "prediction": prediction_bool,
                 "model_name": best_model,
                 "model_path": str(model_path),
                 "model_metadata_path": str(model_metadata_path),

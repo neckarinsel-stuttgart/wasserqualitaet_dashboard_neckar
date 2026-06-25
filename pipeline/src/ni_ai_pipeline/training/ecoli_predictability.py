@@ -61,7 +61,7 @@ def select_features(
     if target_col not in df.columns:
         raise KeyError(f"Target column '{target_col}' not found. Columns: {list(df.columns)}")
 
-    y = pd.to_numeric(df[target_col], errors="coerce")
+    y = _labels_to_binary(df[target_col])
     x = df.drop(columns=[target_col, *drop_cols], errors="ignore")
 
     numeric_cols = [c for c in x.columns if pd.api.types.is_numeric_dtype(x[c])]
@@ -77,12 +77,12 @@ def select_features(
 @dataclass
 class ModelResult:
     name: str
-    cv_mae: float
-    cv_rmse: float
-    cv_r2: float
-    holdout_mae: float
-    holdout_rmse: float
-    holdout_r2: float
+    cv_accuracy: float
+    cv_f1: float
+    cv_roc_auc: float
+    holdout_accuracy: float
+    holdout_f1: float
+    holdout_roc_auc: float
 
 
 def _build_model_metadata(
@@ -138,7 +138,36 @@ def predict_with_saved_model(
             x[c] = np.nan
 
     x = x[expected]
-    return np.asarray(model.predict(x), dtype=float)
+    return np.asarray(model.predict(x))
+
+
+def _labels_to_binary(y: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(y, errors="coerce")
+    return numeric.gt(0).astype("boolean")
+
+
+def _positive_scores(model: Any, x: pd.DataFrame) -> np.ndarray | None:
+    if not hasattr(model, "predict_proba"):
+        return None
+
+    proba = model.predict_proba(x)
+    classes = getattr(model, "classes_", None)
+    if classes is None:
+        return None
+
+    classes_arr = np.asarray(classes)
+    if classes_arr.ndim != 1:
+        return None
+
+    positive_idx = None
+    for idx, cls in enumerate(classes_arr):
+        if bool(cls) is True or cls == 1 or cls == "1":
+            positive_idx = idx
+            break
+    if positive_idx is None:
+        positive_idx = len(classes_arr) - 1
+
+    return np.asarray(proba[:, positive_idx], dtype=float)
 
 
 def train_ecoli_predictability(
@@ -171,12 +200,11 @@ def train_ecoli_predictability(
 
     # Local imports so the pipeline can be used without sklearn.
     try:
-        from sklearn.compose import TransformedTargetRegressor
-        from sklearn.dummy import DummyRegressor
-        from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+        from sklearn.dummy import DummyClassifier
         from sklearn.impute import SimpleImputer
         from sklearn.inspection import permutation_importance
-        from sklearn.linear_model import Ridge
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
         from sklearn.model_selection import TimeSeriesSplit
         from sklearn.pipeline import Pipeline
     except Exception as exc:  # pragma: no cover
@@ -216,8 +244,13 @@ def train_ecoli_predictability(
     x = x.loc[valid]
     y = y.loc[valid]
 
+    y = y.astype(bool)
+
     if len(y) < 10:
         raise RuntimeError(f"Not enough label rows to evaluate (n={len(y)}).")
+
+    if y.nunique() < 2:
+        raise RuntimeError("Need at least two target classes to train a classifier.")
 
     n = len(y)
     holdout_n = max(1, int(math.ceil(n * test_fraction)))
@@ -230,21 +263,18 @@ def train_ecoli_predictability(
 
     pre = Pipeline(steps=[("impute", SimpleImputer(strategy="median"))])
 
-    def wrap_target(reg: Any) -> Any:
-        if not log_target:
-            return reg
-        return TransformedTargetRegressor(
-            regressor=reg,
-            func=np.log1p,
-            inverse_func=np.expm1,
-            check_inverse=False,
-        )
-
     models: list[tuple[str, Any]] = [
-        ("dummy_mean", DummyRegressor(strategy="mean")),
-        ("ridge", Ridge(alpha=1.0, random_state=0)),
-        ("rf", RandomForestRegressor(n_estimators=500, random_state=0, n_jobs=-1)),
-        ("hgb", HistGradientBoostingRegressor(random_state=0)),
+        ("dummy_most_frequent", DummyClassifier(strategy="most_frequent")),
+        (
+            "logistic_l2",
+            LogisticRegression(
+                C=1.0,
+                class_weight="balanced",
+                solver="liblinear",
+                max_iter=2000,
+                random_state=0,
+            ),
+        ),
     ]
 
     n_splits = min(5, max(2, train_n // 8))
@@ -253,53 +283,68 @@ def train_ecoli_predictability(
     results: list[ModelResult] = []
 
     for name, reg in models:
-        pipe = Pipeline(steps=[("pre", pre), ("model", wrap_target(reg))])
-
-        cv_mae_scores: list[float] = []
-        cv_rmse_scores: list[float] = []
-        cv_r2_scores: list[float] = []
+        cv_accuracy_scores: list[float] = []
+        cv_f1_scores: list[float] = []
+        cv_roc_auc_scores: list[float] = []
 
         for tr_idx, va_idx in tscv.split(x_train):
             xt, xv = x_train.iloc[tr_idx], x_train.iloc[va_idx]
-            yt = y_train.iloc[tr_idx].to_numpy()
-            yv = y_train.iloc[va_idx].to_numpy()
+            yt = y_train.iloc[tr_idx].astype(bool).to_numpy()
+            yv = y_train.iloc[va_idx].astype(bool).to_numpy()
 
-            pipe.fit(xt, yt)
-            pred = pipe.predict(xv)
+            fold_reg = reg if len(np.unique(yt)) > 1 else DummyClassifier(strategy="most_frequent")
+            fold_pipe = Pipeline(steps=[("pre", pre), ("model", fold_reg)])
 
-            cv_mae_scores.append(_mae(yv, pred))
-            cv_rmse_scores.append(_rmse(yv, pred))
-            cv_r2_scores.append(_r2(yv, pred))
+            fold_pipe.fit(xt, yt)
+            pred = np.asarray(fold_pipe.predict(xv), dtype=bool)
 
-        pipe.fit(x_train, y_train.to_numpy())
-        holdout_pred = pipe.predict(x_test)
+            cv_accuracy_scores.append(accuracy_score(yv, pred))
+            cv_f1_scores.append(f1_score(yv, pred, zero_division=0))
+
+            scores = _positive_scores(fold_pipe, xv)
+            if scores is not None and len(np.unique(yv)) > 1:
+                cv_roc_auc_scores.append(roc_auc_score(yv, scores))
+
+        train_y_bool = y_train.astype(bool).to_numpy()
+        final_reg = reg if len(np.unique(train_y_bool)) > 1 else DummyClassifier(strategy="most_frequent")
+        final_pipe = Pipeline(steps=[("pre", pre), ("model", final_reg)])
+        final_pipe.fit(x_train, train_y_bool)
+        holdout_pred = np.asarray(final_pipe.predict(x_test), dtype=bool)
+        holdout_scores = _positive_scores(final_pipe, x_test)
 
         results.append(
             ModelResult(
                 name=name,
-                cv_mae=float(np.mean(cv_mae_scores)),
-                cv_rmse=float(np.mean(cv_rmse_scores)),
-                cv_r2=float(np.mean(cv_r2_scores)),
-                holdout_mae=_mae(y_test.to_numpy(), holdout_pred),
-                holdout_rmse=_rmse(y_test.to_numpy(), holdout_pred),
-                holdout_r2=_r2(y_test.to_numpy(), holdout_pred),
+                cv_accuracy=float(np.mean(cv_accuracy_scores)),
+                cv_f1=float(np.mean(cv_f1_scores)),
+                cv_roc_auc=float(np.mean(cv_roc_auc_scores)) if cv_roc_auc_scores else float("nan"),
+                holdout_accuracy=accuracy_score(y_test.astype(bool).to_numpy(), holdout_pred),
+                holdout_f1=f1_score(y_test.astype(bool).to_numpy(), holdout_pred, zero_division=0),
+                holdout_roc_auc=(
+                    roc_auc_score(y_test.astype(bool).to_numpy(), holdout_scores)
+                    if holdout_scores is not None and len(np.unique(y_test.to_numpy())) > 1
+                    else float("nan")
+                ),
             )
         )
 
-    best = min(results, key=lambda r: r.holdout_mae)
+    best = max(results, key=lambda r: (r.holdout_f1, r.holdout_accuracy))
 
     best_reg = dict(models)[best.name]
-    best_pipe = Pipeline(steps=[("pre", pre), ("model", wrap_target(best_reg))])
-    best_pipe.fit(x_train, y_train.to_numpy())
+    best_pipe = Pipeline(steps=[("pre", pre), ("model", best_reg)])
+    train_y_bool = y_train.astype(bool).to_numpy()
+    if len(np.unique(train_y_bool)) < 2:
+        best_pipe = Pipeline(steps=[("pre", pre), ("model", DummyClassifier(strategy="most_frequent"))])
+    best_pipe.fit(x_train, train_y_bool)
 
     try:
         perm = permutation_importance(
             best_pipe,
             x_test,
-            y_test.to_numpy(),
+            y_test.astype(bool).to_numpy(),
             n_repeats=50,
             random_state=0,
-            scoring="neg_mean_absolute_error",
+            scoring="f1",
         )
         importances = pd.DataFrame(
             {
@@ -313,7 +358,9 @@ def train_ecoli_predictability(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    results_df = pd.DataFrame([r.__dict__ for r in results]).sort_values("holdout_mae")
+    results_df = pd.DataFrame([r.__dict__ for r in results]).sort_values(
+        ["holdout_f1", "holdout_accuracy"], ascending=[False, False]
+    )
     results_path = out_dir / "ecoli_predictability_results.csv"
     results_df.to_csv(results_path, index=False)
 
@@ -338,16 +385,9 @@ def train_ecoli_predictability(
         f.write(f"TimeSeriesSplit folds: {n_splits}\n\n")
 
         f.write("Target summary (train):\n")
-        f.write(
-            "  mean={:.3f}  std={:.3f}  min={:.3f}  max={:.3f}\n\n".format(
-                float(np.mean(y_train)),
-                float(np.std(y_train)),
-                float(np.min(y_train)),
-                float(np.max(y_train)),
-            )
-        )
+        f.write(f"  positive_rate={float(np.mean(y_train.astype(bool))):.3f}\n\n")
 
-        f.write("Model comparison (sorted by holdout MAE):\n")
+        f.write("Model comparison (sorted by holdout F1, then accuracy):\n")
         f.write(results_df.to_string(index=False))
         f.write("\n\n")
 
@@ -374,6 +414,7 @@ def train_ecoli_predictability(
             best_model_name=best.name,
             data_path=data_path,
         )
+        model_metadata["task"] = "binary_classification"
         model_metadata_path.write_text(
             json.dumps(model_metadata, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -420,12 +461,12 @@ def train_ecoli_predictability(
                 prefix = f"model_{r.name}_"
                 mlflow.log_metrics(
                     {
-                        prefix + "cv_mae": r.cv_mae,
-                        prefix + "cv_rmse": r.cv_rmse,
-                        prefix + "cv_r2": r.cv_r2,
-                        prefix + "holdout_mae": r.holdout_mae,
-                        prefix + "holdout_rmse": r.holdout_rmse,
-                        prefix + "holdout_r2": r.holdout_r2,
+                        prefix + "cv_accuracy": r.cv_accuracy,
+                        prefix + "cv_f1": r.cv_f1,
+                        prefix + "cv_roc_auc": r.cv_roc_auc,
+                        prefix + "holdout_accuracy": r.holdout_accuracy,
+                        prefix + "holdout_f1": r.holdout_f1,
+                        prefix + "holdout_roc_auc": r.holdout_roc_auc,
                     }
                 )
 

@@ -35,3 +35,5 @@ data/bronze/dwd/recents/
 data/bronze/**/*.meta.json
 data/bronze/**/*.log
 data/bronze/**/.DS_Store
+scripts/gold/temp_plot.png
+scripts/gold/rest_plot.png

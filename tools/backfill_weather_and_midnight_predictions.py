@@ -29,6 +29,7 @@ from ni_ai_pipeline.training.ecoli_predictability import (
     load_model_metadata,
     load_saved_model,
     predict_with_saved_model,
+    train_ecoli_predictability,
 )
 
 
@@ -343,6 +344,18 @@ def _backfill_midnight_predictions(
     return len(add_df), len(merged), skipped_missing_features
 
 
+def _needs_classifier_retrain(model_path: Path, model_metadata_path: Path) -> bool:
+    if (not model_path.exists()) or (not model_metadata_path.exists()):
+        return True
+
+    try:
+        metadata = load_model_metadata(model_metadata_path)
+    except Exception:
+        return True
+
+    return str(metadata.get("task")) != "binary_classification"
+
+
 def main() -> int:
     args = _parse_args()
     paths = get_paths(load_dotenv=True, start=_repo_root())
@@ -352,6 +365,16 @@ def main() -> int:
     model_path = args.model_path or (paths.gold_datasets_dir / "ecoli_model.pkl")
     model_metadata_path = args.model_metadata_path or (paths.gold_datasets_dir / "ecoli_model_metadata.json")
     predictions_path = args.predictions_path or (paths.gold_datasets_dir / "predictions.csv")
+
+    if args.model_path is None and args.model_metadata_path is None and _needs_classifier_retrain(
+        model_path,
+        model_metadata_path,
+    ):
+        print(
+            "Model artifacts missing or outdated; training classifier before backfill "
+            f"({model_path}, {model_metadata_path})."
+        )
+        train_ecoli_predictability(paths)
 
     weather_added, weather_total = _backfill_hourly_weather(
         site_id=paths.site_id,

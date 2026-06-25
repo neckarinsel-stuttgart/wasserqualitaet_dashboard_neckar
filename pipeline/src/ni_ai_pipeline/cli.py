@@ -11,7 +11,20 @@ from ni_ai_pipeline.steps.gold_stuttgart_weather import pull_stuttgart_weather_h
 from ni_ai_pipeline.steps.silver_messungen import build_messungen_komplett
 from ni_ai_pipeline.steps.silver_weather import build_silver_weather
 from ni_ai_pipeline.training.ecoli_predictability import train_ecoli_predictability
+from ni_ai_pipeline.training.ecoli_predictability import load_model_metadata
 from ni_ai_pipeline.training.daily_prediction import predict_latest_and_upsert
+
+
+def _needs_classifier_retrain(model_path: Path, model_metadata_path: Path) -> bool:
+    if (not model_path.exists()) or (not model_metadata_path.exists()):
+        return True
+
+    try:
+        metadata = load_model_metadata(model_metadata_path)
+    except Exception:
+        return True
+
+    return str(metadata.get("task")) != "binary_classification"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -218,7 +231,7 @@ def main() -> int:
         model_path = args.model_path or default_model_path
         model_metadata_path = args.model_metadata_path or default_model_metadata_path
         if args.model_path is None and args.model_metadata_path is None:
-            if (not model_path.exists()) or (not model_metadata_path.exists()):
+            if _needs_classifier_retrain(model_path, model_metadata_path):
                 print(
                     "Model artifacts missing; training once before first prediction "
                     f"({model_path}, {model_metadata_path})."
@@ -250,7 +263,7 @@ def main() -> int:
         build_data_full(paths)
         build_masterdata_daily(paths)
         build_daily_gold_dataset(paths)
-        if (not default_model_path.exists()) or (not default_model_metadata_path.exists()):
+        if _needs_classifier_retrain(default_model_path, default_model_metadata_path):
             print(
                 "Model artifacts missing; training once before first prediction "
                 f"({default_model_path}, {default_model_metadata_path})."
