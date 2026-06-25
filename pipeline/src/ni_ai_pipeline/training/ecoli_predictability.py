@@ -143,7 +143,12 @@ def predict_with_saved_model(
 
 def _labels_to_binary(y: pd.Series) -> pd.Series:
     numeric = pd.to_numeric(y, errors="coerce")
-    return numeric.gt(0).astype("boolean")
+    valid = numeric.dropna()
+    if not valid.empty and set(valid.unique()).issubset({0.0, 1.0}):
+        return numeric.astype("boolean")
+    out = pd.Series(pd.NA, index=numeric.index, dtype="boolean")
+    out.loc[numeric.notna()] = numeric.loc[numeric.notna()].gt(0).to_numpy()
+    return out
 
 
 def _positive_scores(model: Any, x: pd.DataFrame) -> np.ndarray | None:
@@ -175,7 +180,7 @@ def train_ecoli_predictability(
     *,
     data_path: Path | None = None,
     out_dir: Path | None = None,
-    target: str = "ecoli",
+    target: str = "pos_neg",
     test_fraction: float = 0.2,
     log_target: bool = False,
     export_ecoli_only: bool = False,

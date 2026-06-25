@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 from ni_ai_pipeline.paths import PathConfig
@@ -8,7 +10,8 @@ from ni_ai_pipeline.paths import PathConfig
 def _clean_value(val: object) -> float:
     if pd.isna(val) or val == "":
         return float("nan")
-    val_str = str(val).replace(">", "").replace(",", ".")
+    val_str = str(val).replace(">", "").replace(",", ".").strip()
+    val_str = re.sub(r"[^0-9.\-]", "", val_str)
     try:
         return float(val_str)
     except Exception:

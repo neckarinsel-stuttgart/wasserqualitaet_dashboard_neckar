@@ -204,6 +204,10 @@ def build_daily_gold_dataset(
     labels = labels_raw.groupby("date", as_index=False).agg({**agg_map, "datum": "count"})
     labels = labels.rename(columns={"datum": "n_samples"})
     labels.insert(0, "site_id", paths.site_id)
+    if "ecoli" in labels.columns:
+        ecoli_numeric = pd.to_numeric(labels["ecoli"], errors="coerce")
+        labels["pos_neg"] = np.where(ecoli_numeric <= 1000, 1, 0)
+        labels.loc[ecoli_numeric.isna(), "pos_neg"] = np.nan
 
     features_out = features.reset_index().rename(columns={"index": "date", "timestamp": "date"})
     features_out["date"] = pd.to_datetime(features_out["date"]).dt.normalize()

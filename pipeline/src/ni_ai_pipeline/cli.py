@@ -79,7 +79,7 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Output dir for report/artifacts (defaults to configured GOLD_DATASETS_DIR)",
     )
-    train.add_argument("--target", type=str, default="ecoli")
+    train.add_argument("--target", type=str, default="pos_neg")
     train.add_argument("--test-fraction", type=float, default=0.2)
     train.add_argument("--log-target", action="store_true")
     train.add_argument("--export-ecoli-only", action="store_true")
