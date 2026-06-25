@@ -18,9 +18,7 @@ services:
     command:
       - sh
       - -c
-      - >-
-        pip install --no-cache-dir -r /app/requirements.txt
-        && uvicorn ni_ai_pipeline.api_app:app --host 0.0.0.0 --port 8000
+      - uvicorn ni_ai_pipeline.api_app:app --host 0.0.0.0 --port 8000
 
   crawl_dwd:
     build:
