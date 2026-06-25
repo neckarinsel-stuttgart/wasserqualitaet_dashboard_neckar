@@ -10,6 +10,9 @@ services:
     volumes:
       - ./data:/app/data
       - ./requirements.txt:/app/requirements.txt:ro
+      - ./pipeline:/app/pipeline:ro
+    environment:
+      PYTHONPATH: /app/pipeline/src
     ports:
       - "8000:8000"
     command:
