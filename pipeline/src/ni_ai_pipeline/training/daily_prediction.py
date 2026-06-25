@@ -20,6 +20,13 @@ def _normalize_date_col(df: pd.DataFrame, *, date_col: str = "date") -> pd.DataF
     return out
 
 
+def _normalize_prediction_target_labels(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "target" in out.columns:
+        out["target"] = out["target"].astype(str).str.strip().str.lower().replace({"pos_neg": "ecoli"})
+    return out
+
+
 def _load_latest_feature_row(
     features_path: Path,
     *,
@@ -70,13 +77,14 @@ def predict_latest_and_upsert(
 
     task = str(metadata.get("task", "")).strip().lower()
     target_name = str(metadata.get("target", "ecoli")).strip().lower()
+    output_target = "ecoli" if target_name == "pos_neg" else target_name
     if task and task != "binary_classification":
         if target_name != "ecoli":
             raise RuntimeError(
                 "Daily predictions require binary_classification for non-ecoli targets; "
                 f"got task={task!r}, target={target_name!r} in {model_metadata_path}."
             )
-    if target_name not in {"pos_neg", "ecoli"}:
+    if output_target not in {"ecoli"}:
         raise RuntimeError(
             "Daily predictions require target='pos_neg' or target='ecoli'; "
             f"got target={target_name or '<missing>'!r} in {model_metadata_path}."
@@ -114,7 +122,7 @@ def predict_latest_and_upsert(
         [
             {
                 "site_id": row_site_id,
-                "target": target_name,
+                "target": output_target,
                 "feature_date": pd.Timestamp(feature_date_ts).strftime("%Y-%m-%d"),
                 "prediction_date": prediction_date_ts.strftime("%Y-%m-%d"),
                 "prediction": prediction_bool,
@@ -129,7 +137,7 @@ def predict_latest_and_upsert(
 
     predictions_path.parent.mkdir(parents=True, exist_ok=True)
     if predictions_path.exists():
-        existing = pd.read_csv(predictions_path)
+        existing = _normalize_prediction_target_labels(pd.read_csv(predictions_path))
         table = pd.concat([existing, record], ignore_index=True)
     else:
         table = record

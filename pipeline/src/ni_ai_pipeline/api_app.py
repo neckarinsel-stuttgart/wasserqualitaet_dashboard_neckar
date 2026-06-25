@@ -236,6 +236,13 @@ def _prediction_value_to_bool(
     return bool(float(numeric) >= float(threshold))
 
 
+def _normalize_prediction_target_label(target: Any) -> str:
+    token = str(target or "").strip().lower()
+    if token == "pos_neg":
+        return "ecoli"
+    return token
+
+
 def _json_compatible_value(value: Any) -> Any:
     if value is None:
         return None
@@ -396,7 +403,7 @@ def create_app() -> FastAPI:
         if "site_id" in latest.index:
             payload["site_id"] = str(latest["site_id"])
         if "target" in latest.index:
-            payload["target"] = str(latest["target"])
+            payload["target"] = _normalize_prediction_target_label(latest["target"])
 
         return payload
 
@@ -593,6 +600,8 @@ def create_app() -> FastAPI:
             sort_cols.append("created_at_utc")
 
         window = window.sort_values(sort_cols)
+        if "target" in window.columns:
+            window["target"] = window["target"].apply(_normalize_prediction_target_label)
         window["prediction_date"] = pd.to_datetime(
             window["prediction_date"], errors="coerce"
         ).dt.strftime("%Y-%m-%d")

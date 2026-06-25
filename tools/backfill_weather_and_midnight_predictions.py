@@ -228,6 +228,13 @@ def _normalize_feature_dates(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _normalize_prediction_target_labels(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "target" in out.columns:
+        out["target"] = out["target"].astype(str).str.strip().str.lower().replace({"pos_neg": "ecoli"})
+    return out
+
+
 def _prediction_to_bool(value: object, *, threshold: float = 0.5) -> bool:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(numeric):
@@ -264,13 +271,14 @@ def _backfill_midnight_predictions(
     metadata = load_model_metadata(model_metadata_path)
     task = str(metadata.get("task", "")).strip().lower()
     target_name = str(metadata.get("target", "ecoli")).strip().lower()
+    output_target = "ecoli" if target_name == "pos_neg" else target_name
     if task and task != "binary_classification":
         if target_name != "ecoli":
             raise RuntimeError(
                 "Midnight backfill requires binary_classification for non-ecoli targets; "
                 f"got task={task!r}, target={target_name!r} in {model_metadata_path}."
             )
-    if target_name not in {"pos_neg", "ecoli"}:
+    if output_target not in {"ecoli"}:
         raise RuntimeError(
             "Midnight backfill requires target='pos_neg' or target='ecoli'; "
             f"got target={target_name or '<missing>'!r} in {model_metadata_path}."
@@ -286,7 +294,7 @@ def _backfill_midnight_predictions(
     features_df = _normalize_feature_dates(features_df)
 
     if predictions_path.exists():
-        pred_existing = pd.read_csv(predictions_path)
+        pred_existing = _normalize_prediction_target_labels(pd.read_csv(predictions_path))
     else:
         pred_existing = pd.DataFrame(columns=["site_id", "target", "prediction_date"])
 
@@ -310,7 +318,7 @@ def _backfill_midnight_predictions(
     skipped_missing_features = 0
 
     for prediction_date in requested_prediction_dates:
-        key = (str(site_id), target_name, prediction_date)
+        key = (str(site_id), output_target, prediction_date)
         if key in existing_key and not overwrite_predictions:
             continue
 
@@ -334,7 +342,7 @@ def _backfill_midnight_predictions(
         to_add.append(
             {
                 "site_id": row_site_id,
-                "target": target_name,
+                "target": output_target,
                 "feature_date": feature_date.strftime("%Y-%m-%d"),
                 "prediction_date": prediction_date.strftime("%Y-%m-%d"),
                 "prediction": pred_value,
