@@ -1,0 +1,367 @@
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
+import requests
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _bootstrap_pythonpath() -> None:
+    src = _repo_root() / "pipeline" / "src"
+    src_str = str(src)
+    if src_str not in sys.path:
+        sys.path.insert(0, src_str)
+
+
+_bootstrap_pythonpath()
+
+from ni_ai_pipeline.paths import get_paths
+from ni_ai_pipeline.training.ecoli_predictability import (
+    load_model_metadata,
+    load_saved_model,
+    predict_with_saved_model,
+)
+
+
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+STUTTGART_LAT = 48.7735
+STUTTGART_LON = 9.17868
+HOURLY_VARS: list[str] = [
+    "temperature_2m",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "apparent_temperature",
+    "precipitation_probability",
+    "precipitation",
+    "rain",
+    "showers",
+    "weather_code",
+]
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Backfill missing Stuttgart hourly weather rows and midnight predictions "
+            "for the last N days ending today."
+        )
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Number of days ending today to backfill (default: 30)",
+    )
+    parser.add_argument(
+        "--timezone",
+        type=str,
+        default="Europe/Berlin",
+        help="IANA timezone used for local dates/hours (default: Europe/Berlin)",
+    )
+    parser.add_argument(
+        "--horizon-days",
+        type=int,
+        default=1,
+        help="Prediction horizon in days used by midnight prediction flow (default: 1)",
+    )
+    parser.add_argument(
+        "--weather-table-path",
+        type=Path,
+        default=None,
+        help="Optional path to stuttgart_weather.csv",
+    )
+    parser.add_argument(
+        "--predictions-path",
+        type=Path,
+        default=None,
+        help="Optional path to predictions.csv",
+    )
+    parser.add_argument(
+        "--features-path",
+        type=Path,
+        default=None,
+        help="Optional path to gold_daily_features.csv",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Optional path to ecoli model pickle",
+    )
+    parser.add_argument(
+        "--model-metadata-path",
+        type=Path,
+        default=None,
+        help="Optional path to model metadata JSON",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Compute and print missing rows without writing files",
+    )
+    return parser.parse_args()
+
+
+def _date_window(days: int, timezone: str) -> pd.DatetimeIndex:
+    if days <= 0:
+        raise ValueError(f"days must be >= 1, got {days}")
+    tz = ZoneInfo(timezone)
+    today_local = pd.Timestamp(datetime.now(tz).date())
+    return pd.date_range(end=today_local, periods=days, freq="D")
+
+
+def _fetch_open_meteo_hourly_for_day(day_local: pd.Timestamp, timezone: str) -> pd.DataFrame:
+    day_str = pd.Timestamp(day_local).strftime("%Y-%m-%d")
+    params = {
+        "latitude": STUTTGART_LAT,
+        "longitude": STUTTGART_LON,
+        "hourly": ",".join(HOURLY_VARS),
+        "timezone": timezone,
+        "start_date": day_str,
+        "end_date": day_str,
+    }
+
+    response = requests.get(OPEN_METEO_URL, params=params, timeout=30)
+    response.raise_for_status()
+    payload = response.json()
+
+    hourly = payload.get("hourly")
+    if not isinstance(hourly, dict) or "time" not in hourly:
+        raise RuntimeError("Open-Meteo response missing 'hourly.time'")
+
+    out = pd.DataFrame({"weather_time_local": hourly["time"]})
+    for var_name in HOURLY_VARS:
+        out[var_name] = hourly.get(var_name)
+
+    out["weather_time_local"] = pd.to_datetime(out["weather_time_local"], errors="coerce")
+    out = out.dropna(subset=["weather_time_local"]).sort_values("weather_time_local")
+    return out
+
+
+def _backfill_hourly_weather(
+    *,
+    site_id: str,
+    weather_table_path: Path,
+    days: int,
+    timezone: str,
+    dry_run: bool,
+) -> tuple[int, int]:
+    weather_table_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if weather_table_path.exists():
+        existing = pd.read_csv(weather_table_path)
+    else:
+        existing = pd.DataFrame(columns=["site_id", "weather_time_local"])
+
+    existing["site_id"] = existing.get("site_id", pd.Series(dtype=str)).astype(str)
+    existing["weather_time_local"] = pd.to_datetime(existing.get("weather_time_local"), errors="coerce")
+    existing = existing.dropna(subset=["weather_time_local"]).copy()
+
+    existing_key = set(zip(existing["site_id"], existing["weather_time_local"]))
+
+    day_range = _date_window(days, timezone)
+    day_frames: list[pd.DataFrame] = []
+    for day_local in day_range:
+        day_df = _fetch_open_meteo_hourly_for_day(day_local=day_local, timezone=timezone)
+        day_df.insert(0, "site_id", site_id)
+        day_df["timezone"] = timezone
+        day_df["selected_hour"] = day_df["weather_time_local"].dt.hour
+        day_df["source"] = "open-meteo"
+        day_df["created_at_utc"] = pd.Timestamp.now(tz="UTC").isoformat()
+        day_frames.append(day_df)
+
+    pulled = pd.concat(day_frames, ignore_index=True) if day_frames else pd.DataFrame()
+    if pulled.empty:
+        return 0, len(existing)
+
+    pulled["site_id"] = pulled["site_id"].astype(str)
+    pulled["weather_time_local"] = pd.to_datetime(pulled["weather_time_local"], errors="coerce")
+    pulled = pulled.dropna(subset=["weather_time_local"]).copy()
+
+    missing_mask = [
+        (site, ts) not in existing_key
+        for site, ts in zip(pulled["site_id"], pulled["weather_time_local"], strict=False)
+    ]
+    missing = pulled.loc[missing_mask].copy()
+
+    if missing.empty:
+        return 0, len(existing)
+
+    merged = pd.concat([existing, missing], ignore_index=True)
+    merged = merged.drop_duplicates(subset=["site_id", "weather_time_local"], keep="last")
+    merged = merged.sort_values(["weather_time_local", "site_id"])
+
+    if not dry_run:
+        out = merged.copy()
+        out["weather_time_local"] = pd.to_datetime(
+            out["weather_time_local"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d %H:%M:%S")
+        out.to_csv(weather_table_path, index=False)
+
+    return len(missing), len(merged)
+
+
+def _normalize_feature_dates(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.tz_localize(None).dt.normalize()
+    out = out.dropna(subset=["date"]).sort_values("date")
+    return out
+
+
+def _backfill_midnight_predictions(
+    *,
+    site_id: str,
+    features_path: Path,
+    model_path: Path,
+    model_metadata_path: Path,
+    predictions_path: Path,
+    days: int,
+    timezone: str,
+    horizon_days: int,
+    dry_run: bool,
+) -> tuple[int, int, int]:
+    if horizon_days < 0:
+        raise ValueError(f"horizon_days must be >= 0, got {horizon_days}")
+    if not features_path.exists():
+        raise FileNotFoundError(f"Features dataset not found: {features_path}")
+
+    model = load_saved_model(model_path)
+    metadata = load_model_metadata(model_metadata_path)
+    target_name = str(metadata.get("target", "ecoli"))
+
+    features_df = pd.read_csv(features_path)
+    if "date" not in features_df.columns:
+        raise KeyError(f"Missing 'date' column in features dataset: {features_path}")
+
+    if "site_id" in features_df.columns:
+        features_df = features_df.loc[features_df["site_id"].astype(str) == str(site_id)].copy()
+    features_df = _normalize_feature_dates(features_df)
+
+    if predictions_path.exists():
+        pred_existing = pd.read_csv(predictions_path)
+    else:
+        pred_existing = pd.DataFrame(columns=["site_id", "target", "prediction_date"])
+
+    pred_existing["site_id"] = pred_existing.get("site_id", pd.Series(dtype=str)).astype(str)
+    pred_existing["target"] = pred_existing.get("target", pd.Series(dtype=str)).astype(str)
+    pred_existing["prediction_date"] = pd.to_datetime(
+        pred_existing.get("prediction_date"), errors="coerce"
+    ).dt.normalize()
+    pred_existing = pred_existing.dropna(subset=["prediction_date"]).copy()
+
+    existing_key = set(
+        zip(
+            pred_existing["site_id"],
+            pred_existing["target"],
+            pred_existing["prediction_date"],
+        )
+    )
+
+    requested_prediction_dates = _date_window(days, timezone)
+    to_add: list[dict[str, object]] = []
+    skipped_missing_features = 0
+
+    for prediction_date in requested_prediction_dates:
+        key = (str(site_id), target_name, prediction_date)
+        if key in existing_key:
+            continue
+
+        feature_date = prediction_date - pd.Timedelta(days=horizon_days)
+        feature_rows = features_df.loc[features_df["date"] == feature_date].copy()
+        if feature_rows.empty:
+            skipped_missing_features += 1
+            continue
+
+        latest_feature_row = feature_rows.tail(1).copy()
+        pred = predict_with_saved_model(model, latest_feature_row, metadata=metadata)
+        pred_value = float(np.asarray(pred, dtype=float)[0])
+
+        row_site_id = str(
+            latest_feature_row.get("site_id", pd.Series([site_id], index=latest_feature_row.index)).iloc[0]
+        )
+
+        to_add.append(
+            {
+                "site_id": row_site_id,
+                "target": target_name,
+                "feature_date": feature_date.strftime("%Y-%m-%d"),
+                "prediction_date": prediction_date.strftime("%Y-%m-%d"),
+                "prediction": pred_value,
+                "model_name": str(metadata.get("best_model", "unknown")),
+                "model_path": str(model_path),
+                "model_metadata_path": str(model_metadata_path),
+                "features_path": str(features_path),
+                "created_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
+            }
+        )
+
+    if not to_add:
+        return 0, len(pred_existing), skipped_missing_features
+
+    add_df = pd.DataFrame(to_add)
+    merged = pd.concat([pred_existing, add_df], ignore_index=True)
+    merged = merged.drop_duplicates(subset=["site_id", "target", "prediction_date"], keep="last")
+    merged = merged.sort_values(["prediction_date", "site_id", "target"])
+
+    if not dry_run:
+        predictions_path.parent.mkdir(parents=True, exist_ok=True)
+        merged.to_csv(predictions_path, index=False)
+
+    return len(add_df), len(merged), skipped_missing_features
+
+
+def main() -> int:
+    args = _parse_args()
+    paths = get_paths(load_dotenv=True, start=_repo_root())
+
+    weather_table_path = args.weather_table_path or (paths.gold_datasets_dir / "stuttgart_weather.csv")
+    features_path = args.features_path or (paths.gold_datasets_dir / "gold_daily_features.csv")
+    model_path = args.model_path or (paths.gold_datasets_dir / "ecoli_model.pkl")
+    model_metadata_path = args.model_metadata_path or (paths.gold_datasets_dir / "ecoli_model_metadata.json")
+    predictions_path = args.predictions_path or (paths.gold_datasets_dir / "predictions.csv")
+
+    weather_added, weather_total = _backfill_hourly_weather(
+        site_id=paths.site_id,
+        weather_table_path=weather_table_path,
+        days=args.days,
+        timezone=args.timezone,
+        dry_run=args.dry_run,
+    )
+
+    predictions_added, predictions_total, skipped_no_features = _backfill_midnight_predictions(
+        site_id=paths.site_id,
+        features_path=features_path,
+        model_path=model_path,
+        model_metadata_path=model_metadata_path,
+        predictions_path=predictions_path,
+        days=args.days,
+        timezone=args.timezone,
+        horizon_days=args.horizon_days,
+        dry_run=args.dry_run,
+    )
+
+    mode = "DRY-RUN" if args.dry_run else "WRITE"
+    print(f"[{mode}] Weather rows added: {weather_added} (total table rows: {weather_total})")
+    print(
+        "[{}] Midnight predictions added: {} (total table rows: {}, skipped_no_features: {})".format(
+            mode,
+            predictions_added,
+            predictions_total,
+            skipped_no_features,
+        )
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

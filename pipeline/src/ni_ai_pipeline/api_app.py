@@ -243,6 +243,13 @@ def _json_compatible_value(value: Any) -> Any:
     return value
 
 
+def _rows_to_json_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for row in df.to_dict(orient="records"):
+        records.append({str(k): _json_compatible_value(v) for k, v in row.items()})
+    return records
+
+
 def create_app() -> FastAPI:
     # Expose API endpoints only via explicit routes (no auto docs/openapi routes).
     app = FastAPI(
@@ -450,6 +457,140 @@ def create_app() -> FastAPI:
         payload["weather_time_local"] = now_local_hour.strftime("%Y-%m-%d %H:%M:%S")
 
         return payload
+
+    @app.get("/get_last_30d_weather")
+    def get_last_30d_weather() -> dict[str, Any]:
+        """Return all weather rows with weather_time_local in the last 30 calendar days."""
+
+        paths = get_paths(load_dotenv=True)
+        weather_path = paths.gold_datasets_dir / "stuttgart_weather.csv"
+        if not weather_path.exists():
+            raise HTTPException(status_code=404, detail=f"Not found: {weather_path}")
+
+        try:
+            df = pd.read_csv(weather_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"No rows in: {weather_path}")
+
+        if "weather_time_local" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="stuttgart_weather.csv is missing required column: weather_time_local",
+            )
+
+        if paths.site_id is not None and "site_id" in df.columns:
+            df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
+            if df.empty:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No weather rows for site_id={paths.site_id}",
+                )
+
+        df["weather_time_local"] = pd.to_datetime(df["weather_time_local"], errors="coerce")
+        df = df.dropna(subset=["weather_time_local"])
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No valid weather_time_local rows found")
+
+        end_day = pd.Timestamp.now().normalize()
+        start_day = end_day - pd.Timedelta(days=29)
+        window = df.loc[
+            (df["weather_time_local"] >= start_day)
+            & (df["weather_time_local"] < (end_day + pd.Timedelta(days=1)))
+        ].copy()
+
+        if window.empty:
+            raise HTTPException(status_code=404, detail="No weather rows in the last 30 days")
+
+        sort_cols = ["weather_time_local"]
+        if "created_at_utc" in window.columns:
+            window["created_at_utc"] = pd.to_datetime(
+                window["created_at_utc"], errors="coerce", utc=True
+            )
+            sort_cols.append("created_at_utc")
+
+        window = window.sort_values(sort_cols)
+        window["weather_time_local"] = pd.to_datetime(
+            window["weather_time_local"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        return {
+            "site_id": paths.site_id,
+            "days": 30,
+            "start_date": start_day.strftime("%Y-%m-%d"),
+            "end_date": end_day.strftime("%Y-%m-%d"),
+            "count": int(len(window)),
+            "rows": _rows_to_json_records(window),
+        }
+
+    @app.get("/get_last_30d_predictions")
+    def get_last_30d_predictions() -> dict[str, Any]:
+        """Return prediction rows with prediction_date in the last 30 calendar days."""
+
+        paths = get_paths(load_dotenv=True)
+        predictions_path = paths.gold_datasets_dir / "predictions.csv"
+        if not predictions_path.exists():
+            raise HTTPException(status_code=404, detail=f"Not found: {predictions_path}")
+
+        try:
+            df = pd.read_csv(predictions_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"No rows in: {predictions_path}")
+
+        if "prediction_date" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="predictions.csv is missing required column: prediction_date",
+            )
+
+        if paths.site_id is not None and "site_id" in df.columns:
+            df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
+            if df.empty:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No prediction rows for site_id={paths.site_id}",
+                )
+
+        df["prediction_date"] = pd.to_datetime(df["prediction_date"], errors="coerce").dt.tz_localize(None)
+        df = df.dropna(subset=["prediction_date"])
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No valid prediction_date rows found")
+
+        end_day = pd.Timestamp.now().normalize()
+        start_day = end_day - pd.Timedelta(days=29)
+        window = df.loc[
+            (df["prediction_date"] >= start_day)
+            & (df["prediction_date"] < (end_day + pd.Timedelta(days=1)))
+        ].copy()
+
+        if window.empty:
+            raise HTTPException(status_code=404, detail="No prediction rows in the last 30 days")
+
+        sort_cols = ["prediction_date"]
+        if "created_at_utc" in window.columns:
+            window["created_at_utc"] = pd.to_datetime(
+                window["created_at_utc"], errors="coerce", utc=True
+            )
+            sort_cols.append("created_at_utc")
+
+        window = window.sort_values(sort_cols)
+        window["prediction_date"] = pd.to_datetime(
+            window["prediction_date"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
+
+        return {
+            "site_id": paths.site_id,
+            "days": 30,
+            "start_date": start_day.strftime("%Y-%m-%d"),
+            "end_date": end_day.strftime("%Y-%m-%d"),
+            "count": int(len(window)),
+            "rows": _rows_to_json_records(window),
+        }
 
     return app
 
