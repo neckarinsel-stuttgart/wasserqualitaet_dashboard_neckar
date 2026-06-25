@@ -255,7 +255,18 @@ def _backfill_midnight_predictions(
 
     model = load_saved_model(model_path)
     metadata = load_model_metadata(model_metadata_path)
-    target_name = str(metadata.get("target", "ecoli"))
+    task = str(metadata.get("task", "")).strip().lower()
+    target_name = str(metadata.get("target", "")).strip().lower()
+    if task and task != "binary_classification":
+        raise RuntimeError(
+            "Midnight backfill requires a binary_classification model; "
+            f"got task={task!r} in {model_metadata_path}."
+        )
+    if target_name != "pos_neg":
+        raise RuntimeError(
+            "Midnight backfill requires target='pos_neg'; "
+            f"got target={target_name or '<missing>'!r} in {model_metadata_path}."
+        )
 
     features_df = pd.read_csv(features_path)
     if "date" not in features_df.columns:

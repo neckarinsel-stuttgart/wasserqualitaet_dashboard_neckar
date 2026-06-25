@@ -73,13 +73,15 @@ services:
       - ./data:/app/data
       - ./requirements.txt:/app/requirements.txt:ro
       - ./scripts:/app/scripts:ro
+      - ./pipeline:/app/pipeline:ro
+    environment:
+      PYTHONPATH: /app/pipeline/src
     # Silver + Gold only (assumes bronze already exists)
     command:
       - sh
       - -c
       - >-
         pip install --no-cache-dir -r /app/requirements.txt
-        && pip install --no-cache-dir ./pipeline[train]
         && python scripts/silver/clean_dwd_daten.py
         && python scripts/silver/create_messungen_complete.py
         && python scripts/gold/data_full.py

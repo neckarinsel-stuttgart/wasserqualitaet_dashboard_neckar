@@ -68,6 +68,19 @@ def predict_latest_and_upsert(
     model = load_saved_model(model_path)
     metadata = load_model_metadata(model_metadata_path)
 
+    task = str(metadata.get("task", "")).strip().lower()
+    target_name = str(metadata.get("target", "")).strip().lower()
+    if task and task != "binary_classification":
+        raise RuntimeError(
+            "Daily predictions require a binary_classification model; "
+            f"got task={task!r} in {model_metadata_path}."
+        )
+    if target_name != "pos_neg":
+        raise RuntimeError(
+            "Daily predictions require target='pos_neg'; "
+            f"got target={target_name or '<missing>'!r} in {model_metadata_path}."
+        )
+
     latest = _load_latest_feature_row(features_path, site_id=paths.site_id)
     predictions = predict_with_saved_model(model, latest, metadata=metadata)
 
@@ -80,7 +93,6 @@ def predict_latest_and_upsert(
 
     prediction_date_ts = pd.Timestamp(feature_date_ts).normalize() + pd.Timedelta(days=horizon_days)
 
-    target_name = str(metadata.get("target", "ecoli"))
     best_model = str(metadata.get("best_model", "unknown"))
     row_site_id = str(latest.get("site_id", pd.Series([paths.site_id])).iloc[0])
 

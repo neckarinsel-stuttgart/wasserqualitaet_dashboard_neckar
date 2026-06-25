@@ -54,7 +54,8 @@ def test_predict_latest_and_upsert(tmp_path: Path) -> None:
     metadata_path.write_text(
         json.dumps(
             {
-                "target": "ecoli",
+                "target": "pos_neg",
+                "task": "binary_classification",
                 "feature_columns": ["f1", "f2"],
                 "best_model": "dummy",
             }
