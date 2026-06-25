@@ -459,6 +459,7 @@ def create_app() -> FastAPI:
         return payload
 
     @app.get("/get_last_30d_weather")
+    @app.get("/get-last-30d-weather")
     def get_last_30d_weather() -> dict[str, Any]:
         """Return all weather rows with weather_time_local in the last 30 calendar days."""
 
@@ -526,6 +527,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/get_last_30d_predictions")
+    @app.get("/get-last-30d-predictions")
     def get_last_30d_predictions() -> dict[str, Any]:
         """Return prediction rows with prediction_date in the last 30 calendar days."""
 
