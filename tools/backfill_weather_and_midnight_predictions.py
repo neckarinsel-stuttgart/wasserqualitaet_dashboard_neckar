@@ -108,6 +108,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Compute and print missing rows without writing files",
     )
+    parser.add_argument(
+        "--overwrite-predictions",
+        action="store_true",
+        help="Regenerate and replace prediction rows in the backfill window instead of skipping existing ones",
+    )
     return parser.parse_args()
 
 
@@ -217,6 +222,13 @@ def _normalize_feature_dates(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _prediction_to_bool(value: object, *, threshold: float = 0.5) -> bool:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        raise ValueError(f"Could not convert prediction value to bool: {value!r}")
+    return bool(float(numeric) >= threshold)
+
+
 def _backfill_midnight_predictions(
     *,
     site_id: str,
@@ -228,6 +240,7 @@ def _backfill_midnight_predictions(
     timezone: str,
     horizon_days: int,
     dry_run: bool,
+    overwrite_predictions: bool,
 ) -> tuple[int, int, int]:
     if horizon_days < 0:
         raise ValueError(f"horizon_days must be >= 0, got {horizon_days}")
@@ -272,7 +285,7 @@ def _backfill_midnight_predictions(
 
     for prediction_date in requested_prediction_dates:
         key = (str(site_id), target_name, prediction_date)
-        if key in existing_key:
+        if key in existing_key and not overwrite_predictions:
             continue
 
         feature_date = prediction_date - pd.Timedelta(days=horizon_days)
@@ -283,7 +296,7 @@ def _backfill_midnight_predictions(
 
         latest_feature_row = feature_rows.tail(1).copy()
         pred = predict_with_saved_model(model, latest_feature_row, metadata=metadata)
-        pred_value = float(np.asarray(pred, dtype=float)[0])
+        pred_value = _prediction_to_bool(np.asarray(pred, dtype=float)[0])
 
         row_site_id = str(
             latest_feature_row.get("site_id", pd.Series([site_id], index=latest_feature_row.index)).iloc[0]
@@ -308,6 +321,17 @@ def _backfill_midnight_predictions(
         return 0, len(pred_existing), skipped_missing_features
 
     add_df = pd.DataFrame(to_add)
+    if overwrite_predictions:
+        replacement_keys = set(
+            zip(add_df["site_id"], add_df["target"], pd.to_datetime(add_df["prediction_date"], errors="coerce"))
+        )
+        pred_existing = pred_existing.loc[
+            ~pred_existing.apply(
+                lambda row: (row["site_id"], row["target"], row["prediction_date"]) in replacement_keys,
+                axis=1,
+            )
+        ].copy()
+
     merged = pd.concat([pred_existing, add_df], ignore_index=True)
     merged = merged.drop_duplicates(subset=["site_id", "target", "prediction_date"], keep="last")
     merged = merged.sort_values(["prediction_date", "site_id", "target"])
@@ -347,6 +371,7 @@ def main() -> int:
         timezone=args.timezone,
         horizon_days=args.horizon_days,
         dry_run=args.dry_run,
+        overwrite_predictions=args.overwrite_predictions,
     )
 
     mode = "DRY-RUN" if args.dry_run else "WRITE"
