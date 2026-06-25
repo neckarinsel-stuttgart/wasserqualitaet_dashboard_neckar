@@ -25,6 +25,11 @@ def _bootstrap_pythonpath() -> None:
 _bootstrap_pythonpath()
 
 from ni_ai_pipeline.paths import get_paths
+from ni_ai_pipeline.steps.gold_daily_dataset import build_daily_gold_dataset
+from ni_ai_pipeline.steps.gold_data_full import build_data_full
+from ni_ai_pipeline.steps.gold_masterdata import build_masterdata_daily
+from ni_ai_pipeline.steps.silver_messungen import build_messungen_komplett
+from ni_ai_pipeline.steps.silver_weather import build_silver_weather
 from ni_ai_pipeline.training.ecoli_predictability import (
     load_model_metadata,
     load_saved_model,
@@ -374,6 +379,11 @@ def main() -> int:
             "Model artifacts missing or outdated; training classifier before backfill "
             f"({model_path}, {model_metadata_path})."
         )
+        build_silver_weather(paths)
+        build_messungen_komplett(paths)
+        build_data_full(paths)
+        build_masterdata_daily(paths)
+        build_daily_gold_dataset(paths)
         train_ecoli_predictability(paths)
 
     weather_added, weather_total = _backfill_hourly_weather(
