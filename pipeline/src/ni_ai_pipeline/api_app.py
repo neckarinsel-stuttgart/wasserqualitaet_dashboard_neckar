@@ -521,8 +521,22 @@ def create_app() -> FastAPI:
             & (df["weather_time_local"] < (end_day + pd.Timedelta(days=1)))
         ].copy()
 
+        window_mode = "calendar_last_30d"
         if window.empty:
-            raise HTTPException(status_code=404, detail="No weather rows in the last 30 days")
+            latest_available = pd.to_datetime(df["weather_time_local"], errors="coerce").max()
+            if pd.isna(latest_available):
+                raise HTTPException(status_code=404, detail="No valid weather_time_local rows found")
+
+            end_day = pd.Timestamp(latest_available).normalize()
+            start_day = end_day - pd.Timedelta(days=29)
+            window = df.loc[
+                (df["weather_time_local"] >= start_day)
+                & (df["weather_time_local"] < (end_day + pd.Timedelta(days=1)))
+            ].copy()
+            window_mode = "latest_available_30d"
+
+        if window.empty:
+            raise HTTPException(status_code=404, detail="No weather rows found after date filtering")
 
         sort_cols = ["weather_time_local"]
         if "created_at_utc" in window.columns:
@@ -539,6 +553,7 @@ def create_app() -> FastAPI:
         return {
             "site_id": paths.site_id,
             "days": 30,
+            "window_mode": window_mode,
             "start_date": start_day.strftime("%Y-%m-%d"),
             "end_date": end_day.strftime("%Y-%m-%d"),
             "count": int(len(window)),
@@ -589,8 +604,22 @@ def create_app() -> FastAPI:
             & (df["prediction_date"] < (end_day + pd.Timedelta(days=1)))
         ].copy()
 
+        window_mode = "calendar_last_30d"
         if window.empty:
-            raise HTTPException(status_code=404, detail="No prediction rows in the last 30 days")
+            latest_available = pd.to_datetime(df["prediction_date"], errors="coerce").max()
+            if pd.isna(latest_available):
+                raise HTTPException(status_code=404, detail="No prediction rows in the last 30 days")
+
+            end_day = pd.Timestamp(latest_available).normalize()
+            start_day = end_day - pd.Timedelta(days=29)
+            window = df.loc[
+                (df["prediction_date"] >= start_day)
+                & (df["prediction_date"] < (end_day + pd.Timedelta(days=1)))
+            ].copy()
+            window_mode = "latest_available_30d"
+
+        if window.empty:
+            raise HTTPException(status_code=404, detail="No prediction rows found after date filtering")
 
         sort_cols = ["prediction_date"]
         if "created_at_utc" in window.columns:
@@ -609,6 +638,7 @@ def create_app() -> FastAPI:
         return {
             "site_id": paths.site_id,
             "days": 30,
+            "window_mode": window_mode,
             "start_date": start_day.strftime("%Y-%m-%d"),
             "end_date": end_day.strftime("%Y-%m-%d"),
             "count": int(len(window)),
