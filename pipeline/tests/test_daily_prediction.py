@@ -83,3 +83,46 @@ def test_predict_latest_and_upsert(tmp_path: Path) -> None:
     )
     out2 = pd.read_csv(predictions_path)
     assert len(out2) == 1
+
+
+def test_predict_latest_and_upsert_ecoli_target_thresholding(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.gold_datasets_dir.mkdir(parents=True, exist_ok=True)
+
+    features_path = paths.gold_datasets_dir / "gold_daily_features.csv"
+    pd.DataFrame(
+        [
+            {"site_id": "default", "date": "2026-06-18", "f1": 400.0, "f2": 400.0},
+            {"site_id": "default", "date": "2026-06-19", "f1": 600.0, "f2": 500.0},
+        ]
+    ).to_csv(features_path, index=False)
+
+    model_path = paths.gold_datasets_dir / "ecoli_model.pkl"
+    with open(model_path, "wb") as f:
+        pickle.dump(_DummyModel(), f)
+
+    metadata_path = paths.gold_datasets_dir / "ecoli_model_metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "target": "ecoli",
+                "task": "regression",
+                "ecoli_threshold": 1000.0,
+                "feature_columns": ["f1", "f2"],
+                "best_model": "dummy_mean",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    predictions_path = predict_latest_and_upsert(
+        paths,
+        model_path=model_path,
+        model_metadata_path=metadata_path,
+        horizon_days=1,
+    )
+
+    out = pd.read_csv(predictions_path)
+    assert len(out) == 1
+    assert str(out.loc[0, "target"]) == "ecoli"
+    assert bool(out.loc[0, "prediction"]) is False

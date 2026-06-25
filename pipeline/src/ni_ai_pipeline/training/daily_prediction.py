@@ -69,15 +69,16 @@ def predict_latest_and_upsert(
     metadata = load_model_metadata(model_metadata_path)
 
     task = str(metadata.get("task", "")).strip().lower()
-    target_name = str(metadata.get("target", "")).strip().lower()
+    target_name = str(metadata.get("target", "ecoli")).strip().lower()
     if task and task != "binary_classification":
+        if target_name != "ecoli":
+            raise RuntimeError(
+                "Daily predictions require binary_classification for non-ecoli targets; "
+                f"got task={task!r}, target={target_name!r} in {model_metadata_path}."
+            )
+    if target_name not in {"pos_neg", "ecoli"}:
         raise RuntimeError(
-            "Daily predictions require a binary_classification model; "
-            f"got task={task!r} in {model_metadata_path}."
-        )
-    if target_name != "pos_neg":
-        raise RuntimeError(
-            "Daily predictions require target='pos_neg'; "
+            "Daily predictions require target='pos_neg' or target='ecoli'; "
             f"got target={target_name or '<missing>'!r} in {model_metadata_path}."
         )
 
@@ -97,10 +98,17 @@ def predict_latest_and_upsert(
     row_site_id = str(latest.get("site_id", pd.Series([paths.site_id])).iloc[0])
 
     raw_prediction = predictions[0]
-    if isinstance(raw_prediction, (bool, np.bool_)):
-        prediction_bool = bool(raw_prediction)
+    if target_name == "ecoli":
+        ecoli_threshold = float(metadata.get("ecoli_threshold", 1000.0))
+        raw_numeric = pd.to_numeric(pd.Series([raw_prediction]), errors="coerce").iloc[0]
+        if pd.isna(raw_numeric):
+            raise RuntimeError(f"Could not convert ecoli prediction to numeric: {raw_prediction!r}")
+        prediction_bool = bool(float(raw_numeric) <= ecoli_threshold)
     else:
-        prediction_bool = bool(pd.to_numeric(pd.Series([raw_prediction]), errors="coerce").iloc[0] >= 0.5)
+        if isinstance(raw_prediction, (bool, np.bool_)):
+            prediction_bool = bool(raw_prediction)
+        else:
+            prediction_bool = bool(pd.to_numeric(pd.Series([raw_prediction]), errors="coerce").iloc[0] >= 0.5)
 
     record = pd.DataFrame(
         [

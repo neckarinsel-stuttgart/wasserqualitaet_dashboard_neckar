@@ -235,6 +235,13 @@ def _prediction_to_bool(value: object, *, threshold: float = 0.5) -> bool:
     return bool(float(numeric) >= threshold)
 
 
+def _ecoli_prediction_to_bool(value: object, *, ecoli_threshold: float = 1000.0) -> bool:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        raise ValueError(f"Could not convert ecoli prediction value to numeric: {value!r}")
+    return bool(float(numeric) <= float(ecoli_threshold))
+
+
 def _backfill_midnight_predictions(
     *,
     site_id: str,
@@ -256,17 +263,19 @@ def _backfill_midnight_predictions(
     model = load_saved_model(model_path)
     metadata = load_model_metadata(model_metadata_path)
     task = str(metadata.get("task", "")).strip().lower()
-    target_name = str(metadata.get("target", "")).strip().lower()
+    target_name = str(metadata.get("target", "ecoli")).strip().lower()
     if task and task != "binary_classification":
+        if target_name != "ecoli":
+            raise RuntimeError(
+                "Midnight backfill requires binary_classification for non-ecoli targets; "
+                f"got task={task!r}, target={target_name!r} in {model_metadata_path}."
+            )
+    if target_name not in {"pos_neg", "ecoli"}:
         raise RuntimeError(
-            "Midnight backfill requires a binary_classification model; "
-            f"got task={task!r} in {model_metadata_path}."
-        )
-    if target_name != "pos_neg":
-        raise RuntimeError(
-            "Midnight backfill requires target='pos_neg'; "
+            "Midnight backfill requires target='pos_neg' or target='ecoli'; "
             f"got target={target_name or '<missing>'!r} in {model_metadata_path}."
         )
+    ecoli_threshold = float(metadata.get("ecoli_threshold", 1000.0))
 
     features_df = pd.read_csv(features_path)
     if "date" not in features_df.columns:
@@ -313,7 +322,10 @@ def _backfill_midnight_predictions(
 
         latest_feature_row = feature_rows.tail(1).copy()
         pred = predict_with_saved_model(model, latest_feature_row, metadata=metadata)
-        pred_value = _prediction_to_bool(np.asarray(pred, dtype=float)[0])
+        if target_name == "ecoli":
+            pred_value = _ecoli_prediction_to_bool(np.asarray(pred)[0], ecoli_threshold=ecoli_threshold)
+        else:
+            pred_value = _prediction_to_bool(np.asarray(pred, dtype=float)[0])
 
         row_site_id = str(
             latest_feature_row.get("site_id", pd.Series([site_id], index=latest_feature_row.index)).iloc[0]

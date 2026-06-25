@@ -208,9 +208,16 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     return df
 
 
-def _prediction_value_to_bool(value: Any, *, threshold: float = 0.5) -> bool:
+def _prediction_value_to_bool(
+    value: Any,
+    *,
+    threshold: float = 0.5,
+    target: str | None = None,
+    ecoli_threshold: float = 1000.0,
+) -> bool:
     """Convert prediction table values to boolean in a tolerant way."""
 
+    target_token = str(target or "").strip().lower()
     if isinstance(value, (bool, np.bool_)):
         return bool(value)
 
@@ -224,6 +231,8 @@ def _prediction_value_to_bool(value: Any, *, threshold: float = 0.5) -> bool:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(numeric):
         raise ValueError(f"Could not convert prediction value to bool: {value!r}")
+    if target_token == "ecoli":
+        return bool(float(numeric) <= float(ecoli_threshold))
     return bool(float(numeric) >= float(threshold))
 
 
@@ -366,7 +375,10 @@ def create_app() -> FastAPI:
         latest = df.sort_values(sort_cols).iloc[-1]
 
         try:
-            prediction_bool = _prediction_value_to_bool(latest["prediction"])
+            prediction_bool = _prediction_value_to_bool(
+                latest["prediction"],
+                target=(str(latest["target"]) if "target" in latest.index else None),
+            )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
