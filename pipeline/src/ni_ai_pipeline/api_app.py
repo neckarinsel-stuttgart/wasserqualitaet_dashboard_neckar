@@ -535,7 +535,7 @@ def create_app() -> FastAPI:
     @app.get("/get_last_30d_predictions")
     @app.get("/get-last-30d-predictions")
     def get_last_30d_predictions() -> dict[str, Any]:
-        """Return all available prediction rows from predictions.csv."""
+        """Return all raw rows from predictions.csv without filtering."""
 
         paths = get_paths(load_dotenv=True)
         predictions_path = paths.gold_datasets_dir / "predictions.csv"
@@ -550,41 +550,22 @@ def create_app() -> FastAPI:
         if df.empty:
             raise HTTPException(status_code=404, detail=f"No rows in: {predictions_path}")
 
-        if "prediction_date" not in df.columns:
-            raise HTTPException(
-                status_code=500,
-                detail="predictions.csv is missing required column: prediction_date",
-            )
-
-        df["prediction_date"] = pd.to_datetime(df["prediction_date"], errors="coerce").dt.tz_localize(None)
-        df = df.dropna(subset=["prediction_date"])
-        if df.empty:
-            raise HTTPException(status_code=404, detail="No valid prediction_date rows found")
-
         window = df.copy()
 
-        sort_cols = ["prediction_date"]
-        if "created_at_utc" in window.columns:
-            window["created_at_utc"] = pd.to_datetime(
-                window["created_at_utc"], errors="coerce", utc=True
-            )
-            sort_cols.append("created_at_utc")
-
-        window = window.sort_values(sort_cols)
-        min_prediction_ts = pd.to_datetime(window["prediction_date"], errors="coerce").min()
-        max_prediction_ts = pd.to_datetime(window["prediction_date"], errors="coerce").max()
-        if "target" in window.columns:
-            window["target"] = window["target"].apply(_normalize_prediction_target_label)
-        window["prediction_date"] = pd.to_datetime(
-            window["prediction_date"], errors="coerce"
-        ).dt.strftime("%Y-%m-%d")
+        start_date: str | None = None
+        end_date: str | None = None
+        if "prediction_date" in window.columns:
+            parsed_dates = pd.to_datetime(window["prediction_date"], errors="coerce")
+            if parsed_dates.notna().any():
+                start_date = pd.Timestamp(parsed_dates.min()).normalize().strftime("%Y-%m-%d")
+                end_date = pd.Timestamp(parsed_dates.max()).normalize().strftime("%Y-%m-%d")
 
         return {
             "site_id": paths.site_id,
             "days": "all",
-            "window_mode": "all_time",
-            "start_date": pd.Timestamp(min_prediction_ts).normalize().strftime("%Y-%m-%d"),
-            "end_date": pd.Timestamp(max_prediction_ts).normalize().strftime("%Y-%m-%d"),
+            "window_mode": "all_time_raw_csv",
+            "start_date": start_date,
+            "end_date": end_date,
             "count": int(len(window)),
             "rows": _rows_to_json_records(window),
         }
