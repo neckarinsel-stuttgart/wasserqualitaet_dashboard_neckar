@@ -265,12 +265,12 @@ def _resolve_rain_forecast_for_day(paths: PathConfig, *, day_local: pd.Timestamp
         )
 
     if paths.site_id is not None and "site_id" in weather.columns:
-        weather = weather.loc[weather["site_id"].astype(str) == str(paths.site_id)].copy()
-        if weather.empty:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No weather rows for site_id={paths.site_id}",
-            )
+        scoped_weather = weather.loc[
+            weather["site_id"].astype(str) == str(paths.site_id)
+        ].copy()
+        # Prefer site-specific weather when available; otherwise keep all rows.
+        if not scoped_weather.empty:
+            weather = scoped_weather
 
     weather["weather_time_local"] = pd.to_datetime(weather["weather_time_local"], errors="coerce")
     weather = weather.dropna(subset=["weather_time_local"])
@@ -413,12 +413,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No rows in: {predictions_path}")
 
         if paths.site_id is not None and "site_id" in df.columns:
-            df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
-            if df.empty:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No prediction rows for site_id={paths.site_id}",
-                )
+            scoped_df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
+            # Prefer site-specific predictions when available; otherwise keep all rows.
+            if not scoped_df.empty:
+                df = scoped_df
 
         if "prediction_date" not in df.columns:
             raise HTTPException(
