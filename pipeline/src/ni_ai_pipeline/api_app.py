@@ -264,14 +264,6 @@ def _resolve_rain_forecast_for_day(paths: PathConfig, *, day_local: pd.Timestamp
             detail="stuttgart_weather.csv is missing required column: weather_time_local",
         )
 
-    if paths.site_id is not None and "site_id" in weather.columns:
-        scoped_weather = weather.loc[
-            weather["site_id"].astype(str) == str(paths.site_id)
-        ].copy()
-        # Prefer site-specific weather when available; otherwise keep all rows.
-        if not scoped_weather.empty:
-            weather = scoped_weather
-
     weather["weather_time_local"] = pd.to_datetime(weather["weather_time_local"], errors="coerce")
     weather = weather.dropna(subset=["weather_time_local"])
     if weather.empty:
@@ -411,12 +403,6 @@ def create_app() -> FastAPI:
 
         if df.empty:
             raise HTTPException(status_code=404, detail=f"No rows in: {predictions_path}")
-
-        if paths.site_id is not None and "site_id" in df.columns:
-            scoped_df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
-            # Prefer site-specific predictions when available; otherwise keep all rows.
-            if not scoped_df.empty:
-                df = scoped_df
 
         if "prediction_date" not in df.columns:
             raise HTTPException(
