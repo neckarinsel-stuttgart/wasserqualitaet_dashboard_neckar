@@ -243,6 +243,70 @@ def _normalize_prediction_target_label(target: Any) -> str:
     return token
 
 
+def _resolve_rain_forecast_for_day(paths: PathConfig, *, day_local: pd.Timestamp) -> bool:
+    """Return whether rain is forecasted for a given local day from stuttgart_weather.csv."""
+
+    weather_path = paths.gold_datasets_dir / "stuttgart_weather.csv"
+    if not weather_path.exists():
+        raise HTTPException(status_code=404, detail=f"Not found: {weather_path}")
+
+    try:
+        weather = pd.read_csv(weather_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if weather.empty:
+        raise HTTPException(status_code=404, detail=f"No rows in: {weather_path}")
+
+    if "weather_time_local" not in weather.columns:
+        raise HTTPException(
+            status_code=500,
+            detail="stuttgart_weather.csv is missing required column: weather_time_local",
+        )
+
+    if paths.site_id is not None and "site_id" in weather.columns:
+        weather = weather.loc[weather["site_id"].astype(str) == str(paths.site_id)].copy()
+        if weather.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No weather rows for site_id={paths.site_id}",
+            )
+
+    weather["weather_time_local"] = pd.to_datetime(weather["weather_time_local"], errors="coerce")
+    weather = weather.dropna(subset=["weather_time_local"])
+    if weather.empty:
+        raise HTTPException(status_code=404, detail="No valid weather_time_local rows found")
+
+    target_day = pd.Timestamp(day_local).normalize()
+    day_rows = weather.loc[
+        weather["weather_time_local"].dt.normalize() == target_day
+    ].copy()
+    if day_rows.empty:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No weather rows for forecast day: {target_day.strftime('%Y-%m-%d')}",
+        )
+
+    rain_cols = ["rain", "precipitation", "showers"]
+    for col in rain_cols:
+        if col in day_rows.columns:
+            values = pd.to_numeric(day_rows[col], errors="coerce").fillna(0.0)
+            return bool((values > 0.0).any())
+
+    if "precipitation_probability" in day_rows.columns:
+        values = pd.to_numeric(day_rows["precipitation_probability"], errors="coerce")
+        values = values.fillna(0.0)
+        return bool((values >= 50.0).any())
+
+    raise HTTPException(
+        status_code=500,
+        detail=(
+            "stuttgart_weather.csv is missing rain forecast columns; expected one of "
+            "rain/precipitation/showers/precipitation_probability"
+        ),
+    )
+
+
 def _json_compatible_value(value: Any) -> Any:
     if value is None:
         return None
@@ -402,6 +466,18 @@ def create_app() -> FastAPI:
             payload["prediction_date"] = pd.Timestamp(latest["prediction_date"]).strftime("%Y-%m-%d")
         if "target" in latest.index:
             payload["target"] = _normalize_prediction_target_label(latest["target"])
+
+        day_after_date = pd.Timestamp(latest["prediction_date"]).normalize() + pd.Timedelta(days=1)
+        payload["prediction_day_after_date"] = day_after_date.strftime("%Y-%m-%d")
+
+        if prediction_bool is False:
+            payload["rain_prediction_day_after"] = None
+            payload["prediction_day_after"] = False
+            return payload
+
+        rain_day_after = _resolve_rain_forecast_for_day(paths, day_local=day_after_date)
+        payload["rain_prediction_day_after"] = rain_day_after
+        payload["prediction_day_after"] = bool((prediction_bool is True) and (rain_day_after is False))
 
         return payload
 
