@@ -551,31 +551,54 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No rows in: {predictions_path}")
 
         out = df.copy()
+        out.columns = [str(c).replace("\ufeff", "").strip() for c in out.columns]
 
-        if "target" in out.columns:
-            out["target"] = out["target"].apply(_normalize_prediction_target_label)
+        lower_to_name = {str(c).strip().lower(): str(c) for c in out.columns}
+
+        def _col_name(name: str) -> str | None:
+            return lower_to_name.get(name.strip().lower())
+
+        def _series_or_none(name: str) -> pd.Series | None:
+            col = _col_name(name)
+            if col is None:
+                return None
+            return out[col]
+
+        def _parse_date_like(series: pd.Series) -> pd.Series:
+            parsed = pd.to_datetime(series, errors="coerce")
+            if parsed.notna().any():
+                return parsed
+            return pd.to_datetime(series, errors="coerce", dayfirst=True)
+
+        target_series = _series_or_none("target")
+        if target_series is not None:
+            out["target"] = target_series.apply(_normalize_prediction_target_label)
         else:
             out["target"] = None
 
-        if "feature_date" in out.columns:
-            out["feature_date"] = pd.to_datetime(out["feature_date"], errors="coerce").dt.strftime(
+        feature_date_series = _series_or_none("feature_date")
+        if feature_date_series is not None:
+            out["feature_date"] = _parse_date_like(feature_date_series).dt.strftime(
                 "%Y-%m-%d"
             )
         else:
             out["feature_date"] = None
 
-        if "prediction_date" in out.columns:
-            out["prediction_date"] = pd.to_datetime(out["prediction_date"], errors="coerce").dt.strftime(
+        prediction_date_series = _series_or_none("prediction_date")
+        if prediction_date_series is not None:
+            out["prediction_date"] = _parse_date_like(prediction_date_series).dt.strftime(
                 "%Y-%m-%d"
             )
         else:
             out["prediction_date"] = None
 
-        if "prediction" not in out.columns:
+        prediction_series = _series_or_none("prediction")
+        if prediction_series is None:
             raise HTTPException(
                 status_code=500,
                 detail="predictions.csv is missing required column: prediction",
             )
+        out["prediction"] = prediction_series
 
         def _row_prediction_to_bool(row: pd.Series) -> bool:
             return _prediction_value_to_bool(
