@@ -480,7 +480,7 @@ def create_app() -> FastAPI:
     @app.get("/get_last_30d_weather")
     @app.get("/get-last-30d-weather")
     def get_last_30d_weather() -> dict[str, Any]:
-        """Return all weather rows with weather_time_local in the last 30 calendar days."""
+        """Return all available weather rows from stuttgart_weather.csv."""
 
         paths = get_paths(load_dotenv=True)
         weather_path = paths.gold_datasets_dir / "stuttgart_weather.csv"
@@ -501,42 +501,12 @@ def create_app() -> FastAPI:
                 detail="stuttgart_weather.csv is missing required column: weather_time_local",
             )
 
-        if paths.site_id is not None and "site_id" in df.columns:
-            df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
-            if df.empty:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No weather rows for site_id={paths.site_id}",
-                )
-
         df["weather_time_local"] = pd.to_datetime(df["weather_time_local"], errors="coerce")
         df = df.dropna(subset=["weather_time_local"])
         if df.empty:
             raise HTTPException(status_code=404, detail="No valid weather_time_local rows found")
 
-        end_day = pd.Timestamp.now().normalize()
-        start_day = end_day - pd.Timedelta(days=29)
-        window = df.loc[
-            (df["weather_time_local"] >= start_day)
-            & (df["weather_time_local"] < (end_day + pd.Timedelta(days=1)))
-        ].copy()
-
-        window_mode = "calendar_last_30d"
-        if window.empty:
-            latest_available = pd.to_datetime(df["weather_time_local"], errors="coerce").max()
-            if pd.isna(latest_available):
-                raise HTTPException(status_code=404, detail="No valid weather_time_local rows found")
-
-            end_day = pd.Timestamp(latest_available).normalize()
-            start_day = end_day - pd.Timedelta(days=29)
-            window = df.loc[
-                (df["weather_time_local"] >= start_day)
-                & (df["weather_time_local"] < (end_day + pd.Timedelta(days=1)))
-            ].copy()
-            window_mode = "latest_available_30d"
-
-        if window.empty:
-            raise HTTPException(status_code=404, detail="No weather rows found after date filtering")
+        window = df.copy()
 
         sort_cols = ["weather_time_local"]
         if "created_at_utc" in window.columns:
@@ -546,16 +516,18 @@ def create_app() -> FastAPI:
             sort_cols.append("created_at_utc")
 
         window = window.sort_values(sort_cols)
+        min_weather_ts = pd.to_datetime(window["weather_time_local"], errors="coerce").min()
+        max_weather_ts = pd.to_datetime(window["weather_time_local"], errors="coerce").max()
         window["weather_time_local"] = pd.to_datetime(
             window["weather_time_local"], errors="coerce"
         ).dt.strftime("%Y-%m-%d %H:%M:%S")
 
         return {
             "site_id": paths.site_id,
-            "days": 30,
-            "window_mode": window_mode,
-            "start_date": start_day.strftime("%Y-%m-%d"),
-            "end_date": end_day.strftime("%Y-%m-%d"),
+            "days": "all",
+            "window_mode": "all_time",
+            "start_date": pd.Timestamp(min_weather_ts).normalize().strftime("%Y-%m-%d"),
+            "end_date": pd.Timestamp(max_weather_ts).normalize().strftime("%Y-%m-%d"),
             "count": int(len(window)),
             "rows": _rows_to_json_records(window),
         }
@@ -563,7 +535,7 @@ def create_app() -> FastAPI:
     @app.get("/get_last_30d_predictions")
     @app.get("/get-last-30d-predictions")
     def get_last_30d_predictions() -> dict[str, Any]:
-        """Return prediction rows with prediction_date in the last 30 calendar days."""
+        """Return all available prediction rows from predictions.csv."""
 
         paths = get_paths(load_dotenv=True)
         predictions_path = paths.gold_datasets_dir / "predictions.csv"
@@ -584,42 +556,12 @@ def create_app() -> FastAPI:
                 detail="predictions.csv is missing required column: prediction_date",
             )
 
-        if paths.site_id is not None and "site_id" in df.columns:
-            df = df.loc[df["site_id"].astype(str) == str(paths.site_id)].copy()
-            if df.empty:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No prediction rows for site_id={paths.site_id}",
-                )
-
         df["prediction_date"] = pd.to_datetime(df["prediction_date"], errors="coerce").dt.tz_localize(None)
         df = df.dropna(subset=["prediction_date"])
         if df.empty:
             raise HTTPException(status_code=404, detail="No valid prediction_date rows found")
 
-        end_day = pd.Timestamp.now().normalize()
-        start_day = end_day - pd.Timedelta(days=29)
-        window = df.loc[
-            (df["prediction_date"] >= start_day)
-            & (df["prediction_date"] < (end_day + pd.Timedelta(days=1)))
-        ].copy()
-
-        window_mode = "calendar_last_30d"
-        if window.empty:
-            latest_available = pd.to_datetime(df["prediction_date"], errors="coerce").max()
-            if pd.isna(latest_available):
-                raise HTTPException(status_code=404, detail="No prediction rows in the last 30 days")
-
-            end_day = pd.Timestamp(latest_available).normalize()
-            start_day = end_day - pd.Timedelta(days=29)
-            window = df.loc[
-                (df["prediction_date"] >= start_day)
-                & (df["prediction_date"] < (end_day + pd.Timedelta(days=1)))
-            ].copy()
-            window_mode = "latest_available_30d"
-
-        if window.empty:
-            raise HTTPException(status_code=404, detail="No prediction rows found after date filtering")
+        window = df.copy()
 
         sort_cols = ["prediction_date"]
         if "created_at_utc" in window.columns:
@@ -629,6 +571,8 @@ def create_app() -> FastAPI:
             sort_cols.append("created_at_utc")
 
         window = window.sort_values(sort_cols)
+        min_prediction_ts = pd.to_datetime(window["prediction_date"], errors="coerce").min()
+        max_prediction_ts = pd.to_datetime(window["prediction_date"], errors="coerce").max()
         if "target" in window.columns:
             window["target"] = window["target"].apply(_normalize_prediction_target_label)
         window["prediction_date"] = pd.to_datetime(
@@ -637,10 +581,10 @@ def create_app() -> FastAPI:
 
         return {
             "site_id": paths.site_id,
-            "days": 30,
-            "window_mode": window_mode,
-            "start_date": start_day.strftime("%Y-%m-%d"),
-            "end_date": end_day.strftime("%Y-%m-%d"),
+            "days": "all",
+            "window_mode": "all_time",
+            "start_date": pd.Timestamp(min_prediction_ts).normalize().strftime("%Y-%m-%d"),
+            "end_date": pd.Timestamp(max_prediction_ts).normalize().strftime("%Y-%m-%d"),
             "count": int(len(window)),
             "rows": _rows_to_json_records(window),
         }
