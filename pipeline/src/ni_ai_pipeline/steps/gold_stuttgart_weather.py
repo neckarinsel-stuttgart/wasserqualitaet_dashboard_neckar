@@ -41,15 +41,21 @@ def _select_target_hour(*, requested_hour: int | None, timezone: str) -> tuple[d
     return target_local, hour
 
 
-def _fetch_open_meteo_hourly_for_day(*, day_local: datetime, timezone: str) -> pd.DataFrame:
-    day_str = day_local.strftime("%Y-%m-%d")
+def _fetch_open_meteo_hourly_for_range(
+    *,
+    start_day_local: datetime,
+    end_day_local: datetime,
+    timezone: str,
+) -> pd.DataFrame:
+    start_day_str = start_day_local.strftime("%Y-%m-%d")
+    end_day_str = end_day_local.strftime("%Y-%m-%d")
     params = {
         "latitude": STUTTGART_LAT,
         "longitude": STUTTGART_LON,
         "hourly": ",".join(HOURLY_VARS),
         "timezone": timezone,
-        "start_date": day_str,
-        "end_date": day_str,
+        "start_date": start_day_str,
+        "end_date": end_day_str,
     }
 
     response = requests.get(OPEN_METEO_URL, params=params, timeout=30)
@@ -77,7 +83,7 @@ def pull_stuttgart_weather_hourly(
     table_path: Path | None = None,
     upsert: bool = True,
 ) -> Path:
-    """Pull Stuttgart weather for current day and keep only one requested hour.
+    """Pull Stuttgart weather for current and next day at one selected hour.
 
     Default behavior selects the current local hour in the given timezone.
     """
@@ -87,20 +93,28 @@ def pull_stuttgart_weather_hourly(
     table_path = table_path or (paths.gold_datasets_dir / "stuttgart_weather.csv")
     target_local, selected_hour = _select_target_hour(requested_hour=requested_hour, timezone=timezone)
 
-    hourly_df = _fetch_open_meteo_hourly_for_day(day_local=target_local, timezone=timezone)
-    target_date = pd.Timestamp(target_local.date())
-
+    start_day = datetime.combine(target_local.date(), datetime.min.time(), tzinfo=target_local.tzinfo)
+    end_day = start_day.replace(day=start_day.day) + pd.Timedelta(days=1)
+    hourly_df = _fetch_open_meteo_hourly_for_range(
+        start_day_local=start_day,
+        end_day_local=end_day,
+        timezone=timezone,
+    )
     candidates = hourly_df.loc[
-        (hourly_df["weather_time_local"].dt.normalize() == target_date)
-        & (hourly_df["weather_time_local"].dt.hour == selected_hour)
+        hourly_df["weather_time_local"].dt.hour == selected_hour
     ].copy()
 
     if candidates.empty:
         raise RuntimeError(
-            f"No hourly weather row found for date={target_date.date()} hour={selected_hour:02d}"
+            f"No hourly weather rows found for selected hour {selected_hour:02d}"
         )
 
-    selected = candidates.tail(1).copy()
+    candidates = candidates.sort_values("weather_time_local")
+    candidates["weather_day"] = candidates["weather_time_local"].dt.normalize()
+    selected = candidates.groupby("weather_day", as_index=False).tail(1).copy()
+    selected = selected.sort_values("weather_time_local").tail(2)
+    selected = selected.drop(columns=["weather_day"], errors="ignore")
+
     selected.insert(0, "site_id", paths.site_id or "stuttgart")
     selected["timezone"] = timezone
     selected["selected_hour"] = selected_hour

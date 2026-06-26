@@ -532,10 +532,134 @@ def create_app() -> FastAPI:
             "rows": _rows_to_json_records(window),
         }
 
+    @app.get("/get_next_day_weather_prediction")
+    @app.get("/get-next-day-weather-prediction")
+    def get_next_day_weather_prediction() -> list[dict[str, Any]]:
+        """Return all weather rows whose local timestamp falls on tomorrow."""
+
+        paths = get_paths(load_dotenv=True)
+        weather_path = paths.gold_datasets_dir / "stuttgart_weather.csv"
+        if not weather_path.exists():
+            raise HTTPException(status_code=404, detail=f"Not found: {weather_path}")
+
+        try:
+            df = pd.read_csv(weather_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"No rows in: {weather_path}")
+
+        if "weather_time_local" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="stuttgart_weather.csv is missing required column: weather_time_local",
+            )
+
+        timezone = "Europe/Berlin"
+        if "timezone" in df.columns:
+            tz_values = df["timezone"].dropna().astype(str)
+            if not tz_values.empty:
+                timezone = tz_values.iloc[-1]
+
+        df["weather_time_local"] = pd.to_datetime(df["weather_time_local"], errors="coerce")
+        df = df.dropna(subset=["weather_time_local"])
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No valid weather_time_local rows found")
+
+        tomorrow = (
+            pd.Timestamp.now(tz=timezone).tz_localize(None).normalize()
+            + pd.Timedelta(days=1)
+        )
+
+        next_day_rows = df.loc[df["weather_time_local"].dt.normalize() == tomorrow].copy()
+        if next_day_rows.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No weather rows for next day: {tomorrow.strftime('%Y-%m-%d')}",
+            )
+
+        sort_cols = ["weather_time_local"]
+        if "created_at_utc" in next_day_rows.columns:
+            next_day_rows["created_at_utc"] = pd.to_datetime(
+                next_day_rows["created_at_utc"], errors="coerce", utc=True
+            )
+            sort_cols.append("created_at_utc")
+
+        next_day_rows = next_day_rows.sort_values(sort_cols)
+        next_day_rows["weather_time_local"] = pd.to_datetime(
+            next_day_rows["weather_time_local"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        return _rows_to_json_records(next_day_rows)
+
+    @app.get("/get_ho_ne_temperature_today_and_next")
+    @app.get("/get-ho-ne-temperature-today-and-next")
+    def get_ho_ne_temperature_today_and_next() -> list[dict[str, Any]]:
+        """Return today's Ho_Ne_Temperatur and a mirrored copy with next-day timestamps."""
+
+        paths = get_paths(load_dotenv=True)
+        data_full_path = paths.gold_datasets_dir / "data_full.csv"
+        if not data_full_path.exists():
+            raise HTTPException(status_code=404, detail=f"Not found: {data_full_path}")
+
+        try:
+            df = pd.read_csv(data_full_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"No rows in: {data_full_path}")
+
+        if "Ho_Ne_Temperatur" not in df.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="data_full.csv is missing required column: Ho_Ne_Temperatur",
+            )
+
+        ts_col = None
+        for candidate in ["zeit", "date", "datetime", "timestamp"]:
+            if candidate in df.columns:
+                ts_col = candidate
+                break
+        if ts_col is None:
+            raise HTTPException(
+                status_code=500,
+                detail="data_full.csv is missing a supported timestamp column (zeit/date/datetime/timestamp)",
+            )
+
+        df[ts_col] = pd.to_datetime(df[ts_col], errors="coerce")
+        df["Ho_Ne_Temperatur"] = pd.to_numeric(df["Ho_Ne_Temperatur"], errors="coerce")
+        df = df.dropna(subset=[ts_col, "Ho_Ne_Temperatur"])
+        if df.empty:
+            raise HTTPException(status_code=404, detail="No valid timestamp/Ho_Ne_Temperatur rows found")
+
+        today = pd.Timestamp.now().normalize()
+        today_rows = df.loc[df[ts_col].dt.normalize() == today, [ts_col, "Ho_Ne_Temperatur"]].copy()
+        if today_rows.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No Ho_Ne_Temperatur rows found for current day: {today.strftime('%Y-%m-%d')}",
+            )
+
+        today_rows = today_rows.sort_values(ts_col)
+        today_rows["timestamp"] = pd.to_datetime(today_rows[ts_col], errors="coerce")
+
+        next_rows = today_rows.copy()
+        next_rows["timestamp"] = next_rows["timestamp"] + pd.Timedelta(days=1)
+
+        out = pd.concat([today_rows, next_rows], ignore_index=True)
+        out = out[["timestamp", "Ho_Ne_Temperatur"]].copy()
+        out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce").dt.strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+        return _rows_to_json_records(out)
+
     @app.get("/get_last_30d_predictions")
     @app.get("/get-last-30d-predictions")
     def get_last_30d_predictions() -> list[dict[str, Any]]:
-        """Return all predictions with a minimal, frontend-friendly schema."""
+        """Return all predictions with a minimal schema plus optional inferred next-day row."""
 
         paths = get_paths(load_dotenv=True)
         predictions_path = paths.gold_datasets_dir / "predictions.csv"
@@ -612,6 +736,92 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         minimal = out[["target", "feature_date", "prediction_date", "prediction"]].copy()
+        minimal["prediction_date_dt"] = pd.to_datetime(minimal["prediction_date"], errors="coerce")
+
+        def _find_col_ci(df_in: pd.DataFrame, preferred: list[str]) -> str | None:
+            lower_to_actual = {str(c).strip().lower(): str(c) for c in df_in.columns}
+            for token in preferred:
+                hit = lower_to_actual.get(token.strip().lower())
+                if hit is not None:
+                    return hit
+            return None
+
+        # Business rule: if latest known day is True, infer next day True when
+        # next-day noon weather is similar (temp within +/-4C) and no rain at noon.
+        latest_true = minimal.loc[
+            minimal["prediction"].astype(bool) & minimal["prediction_date_dt"].notna()
+        ].sort_values("prediction_date_dt")
+
+        if not latest_true.empty:
+            base = latest_true.iloc[-1]
+            base_day = pd.Timestamp(base["prediction_date_dt"]).normalize()
+            next_day = base_day + pd.Timedelta(days=1)
+
+            already_has_next_day = (minimal["prediction_date_dt"].dt.normalize() == next_day).any()
+
+            if not already_has_next_day:
+                weather_path = paths.gold_datasets_dir / "stuttgart_weather.csv"
+                if weather_path.exists():
+                    try:
+                        weather = pd.read_csv(weather_path)
+                        weather.columns = [str(c).replace("\ufeff", "").strip() for c in weather.columns]
+
+                        ts_col = _find_col_ci(weather, ["weather_time_local"])
+                        temp_col = _find_col_ci(weather, ["temperature_2m", "temperature", "temp_2m"])
+                        rain_col = _find_col_ci(weather, ["rain", "precipitation"])
+
+                        if ts_col is not None and temp_col is not None and rain_col is not None:
+                            weather[ts_col] = pd.to_datetime(weather[ts_col], errors="coerce")
+                            weather = weather.dropna(subset=[ts_col])
+                            weather = weather.loc[weather[ts_col].dt.hour == 12].copy()
+
+                            if not weather.empty:
+                                weather["day"] = weather[ts_col].dt.normalize()
+                                weather = weather.sort_values(ts_col)
+                                noon_by_day = weather.groupby("day", as_index=False).tail(1)
+
+                                base_noon = noon_by_day.loc[noon_by_day["day"] == base_day]
+                                next_noon = noon_by_day.loc[noon_by_day["day"] == next_day]
+
+                                if (not base_noon.empty) and (not next_noon.empty):
+                                    base_temp = pd.to_numeric(base_noon[temp_col], errors="coerce").iloc[-1]
+                                    next_temp = pd.to_numeric(next_noon[temp_col], errors="coerce").iloc[-1]
+                                    next_rain = pd.to_numeric(next_noon[rain_col], errors="coerce").iloc[-1]
+
+                                    similar_temp = pd.notna(base_temp) and pd.notna(next_temp) and (
+                                        abs(float(next_temp) - float(base_temp)) <= 4.0
+                                    )
+                                    no_rain = pd.notna(next_rain) and (float(next_rain) <= 0.0)
+
+                                    if similar_temp and no_rain:
+                                        feature_date_val: str | None = None
+                                        try:
+                                            base_feature_date = pd.to_datetime(base.get("feature_date"), errors="coerce")
+                                            if pd.notna(base_feature_date):
+                                                feature_date_val = (
+                                                    pd.Timestamp(base_feature_date).normalize() + pd.Timedelta(days=1)
+                                                ).strftime("%Y-%m-%d")
+                                        except Exception:
+                                            feature_date_val = None
+
+                                        inferred = pd.DataFrame(
+                                            [
+                                                {
+                                                    "target": base.get("target"),
+                                                    "feature_date": feature_date_val,
+                                                    "prediction_date": next_day.strftime("%Y-%m-%d"),
+                                                    "prediction": True,
+                                                    "prediction_date_dt": next_day,
+                                                }
+                                            ]
+                                        )
+                                        minimal = pd.concat([minimal, inferred], ignore_index=True)
+                    except Exception:
+                        # Never fail endpoint on optional inferred-next-day enhancement.
+                        pass
+
+        minimal = minimal.sort_values("prediction_date_dt", na_position="last")
+        minimal = minimal[["target", "feature_date", "prediction_date", "prediction"]].copy()
         return _rows_to_json_records(minimal)
 
     return app
