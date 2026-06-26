@@ -51,6 +51,7 @@ HOURLY_VARS: list[str] = [
     "rain",
     "showers",
     "weather_code",
+    "wind_speed_10m"
 ]
 
 
