@@ -534,8 +534,8 @@ def create_app() -> FastAPI:
 
     @app.get("/get_last_30d_predictions")
     @app.get("/get-last-30d-predictions")
-    def get_last_30d_predictions() -> dict[str, Any]:
-        """Return all raw rows from predictions.csv without filtering."""
+    def get_last_30d_predictions() -> list[dict[str, Any]]:
+        """Return all predictions with a minimal, frontend-friendly schema."""
 
         paths = get_paths(load_dotenv=True)
         predictions_path = paths.gold_datasets_dir / "predictions.csv"
@@ -550,25 +550,46 @@ def create_app() -> FastAPI:
         if df.empty:
             raise HTTPException(status_code=404, detail=f"No rows in: {predictions_path}")
 
-        window = df.copy()
+        out = df.copy()
 
-        start_date: str | None = None
-        end_date: str | None = None
-        if "prediction_date" in window.columns:
-            parsed_dates = pd.to_datetime(window["prediction_date"], errors="coerce")
-            if parsed_dates.notna().any():
-                start_date = pd.Timestamp(parsed_dates.min()).normalize().strftime("%Y-%m-%d")
-                end_date = pd.Timestamp(parsed_dates.max()).normalize().strftime("%Y-%m-%d")
+        if "target" in out.columns:
+            out["target"] = out["target"].apply(_normalize_prediction_target_label)
+        else:
+            out["target"] = None
 
-        return {
-            "site_id": paths.site_id,
-            "days": "all",
-            "window_mode": "all_time_raw_csv",
-            "start_date": start_date,
-            "end_date": end_date,
-            "count": int(len(window)),
-            "rows": _rows_to_json_records(window),
-        }
+        if "feature_date" in out.columns:
+            out["feature_date"] = pd.to_datetime(out["feature_date"], errors="coerce").dt.strftime(
+                "%Y-%m-%d"
+            )
+        else:
+            out["feature_date"] = None
+
+        if "prediction_date" in out.columns:
+            out["prediction_date"] = pd.to_datetime(out["prediction_date"], errors="coerce").dt.strftime(
+                "%Y-%m-%d"
+            )
+        else:
+            out["prediction_date"] = None
+
+        if "prediction" not in out.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="predictions.csv is missing required column: prediction",
+            )
+
+        def _row_prediction_to_bool(row: pd.Series) -> bool:
+            return _prediction_value_to_bool(
+                row.get("prediction"),
+                target=row.get("target"),
+            )
+
+        try:
+            out["prediction"] = out.apply(_row_prediction_to_bool, axis=1)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        minimal = out[["target", "feature_date", "prediction_date", "prediction"]].copy()
+        return _rows_to_json_records(minimal)
 
     return app
 
