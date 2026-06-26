@@ -18,6 +18,7 @@ HOURLY_VARS: list[str] = [
     "relative_humidity_2m",
     "dew_point_2m",
     "apparent_temperature",
+    "wind_speed_10m",
     "precipitation_probability",
     "precipitation",
     "rain",

@@ -47,6 +47,7 @@ def test_pull_stuttgart_weather_hourly_selects_requested_hour(monkeypatch, tmp_p
             "relative_humidity_2m": [60, 55, 50],
             "dew_point_2m": [12.0, 12.1, 12.2],
             "apparent_temperature": [20.0, 21.1, 22.2],
+            "wind_speed_10m": [5.2, 6.1, 5.8],
             "precipitation_probability": [10, 20, 30],
             "precipitation": [0.0, 0.1, 0.0],
             "rain": [0.0, 0.1, 0.0],
@@ -66,6 +67,7 @@ def test_pull_stuttgart_weather_hourly_selects_requested_hour(monkeypatch, tmp_p
     assert len(out) == 1
     assert str(out.loc[0, "weather_time_local"]).startswith("2026-06-20 14:00:00")
     assert float(out.loc[0, "temperature_2m"]) == 21.0
+    assert float(out.loc[0, "wind_speed_10m"]) == 6.1
 
     pull_stuttgart_weather_hourly(paths, requested_hour=14, timezone="Europe/Berlin")
     out2 = pd.read_csv(out_path)

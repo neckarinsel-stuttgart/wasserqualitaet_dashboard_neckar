@@ -27,6 +27,23 @@ def _normalize_prediction_target_labels(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _coerce_prediction_value_to_bool(value: object, *, threshold: float = 0.5) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"true", "t", "yes", "y", "1"}:
+            return True
+        if token in {"false", "f", "no", "n", "0"}:
+            return False
+
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        raise RuntimeError(f"Could not convert prediction value to bool: {value!r}")
+    return bool(float(numeric) >= float(threshold))
+
+
 def _load_latest_feature_row(
     features_path: Path,
     *,
@@ -138,9 +155,14 @@ def predict_latest_and_upsert(
     predictions_path.parent.mkdir(parents=True, exist_ok=True)
     if predictions_path.exists():
         existing = _normalize_prediction_target_labels(pd.read_csv(predictions_path))
+        if "prediction" in existing.columns:
+            existing["prediction"] = existing["prediction"].apply(_coerce_prediction_value_to_bool)
         table = pd.concat([existing, record], ignore_index=True)
     else:
         table = record
+
+    if "prediction" in table.columns:
+        table["prediction"] = table["prediction"].apply(_coerce_prediction_value_to_bool)
 
     if upsert:
         key_cols = ["site_id", "target", "prediction_date"]

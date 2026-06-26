@@ -400,8 +400,6 @@ def create_app() -> FastAPI:
 
         if "prediction_date" in latest.index:
             payload["prediction_date"] = pd.Timestamp(latest["prediction_date"]).strftime("%Y-%m-%d")
-        if "site_id" in latest.index:
-            payload["site_id"] = str(latest["site_id"])
         if "target" in latest.index:
             payload["target"] = _normalize_prediction_target_label(latest["target"])
 
@@ -639,9 +637,27 @@ def create_app() -> FastAPI:
         today = pd.Timestamp.now().normalize()
         today_rows = df.loc[df[ts_col].dt.normalize() == today, [ts_col, "Ho_Ne_Temperatur"]].copy()
         if today_rows.empty:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No Ho_Ne_Temperatur rows found for current day: {today.strftime('%Y-%m-%d')}",
+            lookback_start = today - pd.Timedelta(days=10)
+            fallback_rows = df.loc[
+                (df[ts_col] < today) & (df[ts_col] >= lookback_start),
+                [ts_col, "Ho_Ne_Temperatur"],
+            ].sort_values(ts_col)
+
+            if fallback_rows.empty:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "No Ho_Ne_Temperatur rows found for current day and no fallback value "
+                        "found in the previous 10 days"
+                    ),
+                )
+
+            last_ts = pd.Timestamp(fallback_rows.iloc[-1][ts_col])
+            time_of_day = last_ts - last_ts.normalize()
+            synthesized_ts = today + time_of_day
+            last_value = float(fallback_rows.iloc[-1]["Ho_Ne_Temperatur"])
+            today_rows = pd.DataFrame(
+                [{ts_col: synthesized_ts, "Ho_Ne_Temperatur": last_value}]
             )
 
         today_rows = today_rows.sort_values(ts_col)
@@ -681,11 +697,27 @@ def create_app() -> FastAPI:
         out = df.copy()
         out.columns = [str(c).replace("\ufeff", "").strip() for c in out.columns]
 
-        # Keep all available columns/rows, only normalize common date fields for API consistency.
+        # Keep all rows, normalize values, and hide internal training/path fields.
+        if "prediction" in out.columns:
+            try:
+                out["prediction"] = out["prediction"].apply(_prediction_value_to_bool)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+
         for dt_col in ["feature_date", "prediction_date"]:
             if dt_col in out.columns:
                 parsed = pd.to_datetime(out[dt_col], errors="coerce")
                 out[dt_col] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), out[dt_col])
+
+        drop_cols = [
+            "site_id",
+            "model_name",
+            "mode_path",
+            "model_path",
+            "model_metadata_path",
+            "features_path",
+        ]
+        out = out.drop(columns=[c for c in drop_cols if c in out.columns])
 
         if "created_at_utc" in out.columns:
             out["created_at_utc"] = pd.to_datetime(out["created_at_utc"], errors="coerce", utc=True)
