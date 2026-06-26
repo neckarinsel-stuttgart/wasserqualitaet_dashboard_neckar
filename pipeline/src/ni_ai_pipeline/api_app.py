@@ -477,9 +477,11 @@ def create_app() -> FastAPI:
 
         return payload
 
+    @app.get("/get_all_weather")
+    @app.get("/get-all-weather")
     @app.get("/get_last_30d_weather")
     @app.get("/get-last-30d-weather")
-    def get_last_30d_weather() -> dict[str, Any]:
+    def get_all_weather() -> dict[str, Any]:
         """Return all available weather rows from stuttgart_weather.csv."""
 
         paths = get_paths(load_dotenv=True)
@@ -593,10 +595,10 @@ def create_app() -> FastAPI:
 
         return _rows_to_json_records(next_day_rows)
 
-    @app.get("/get_ho_ne_temperature_today_and_next")
-    @app.get("/get-ho-ne-temperature-today-and-next")
-    def get_ho_ne_temperature_today_and_next() -> list[dict[str, Any]]:
-        """Return today's Ho_Ne_Temperatur and a mirrored copy with next-day timestamps."""
+    @app.get("/get_water_temp")
+    @app.get("/get-water-temp")
+    def get_water_temperature_today_and_next() -> list[dict[str, Any]]:
+        """Return today's water temperature and a mirrored copy with next-day timestamps."""
 
         paths = get_paths(load_dotenv=True)
         data_full_path = paths.gold_datasets_dir / "data_full.csv"
@@ -656,10 +658,12 @@ def create_app() -> FastAPI:
 
         return _rows_to_json_records(out)
 
+    @app.get("/get_all_predictions")
+    @app.get("/get-all-predictions")
     @app.get("/get_last_30d_predictions")
     @app.get("/get-last-30d-predictions")
-    def get_last_30d_predictions() -> list[dict[str, Any]]:
-        """Return all predictions with a minimal schema plus optional inferred next-day row."""
+    def get_all_predictions() -> list[dict[str, Any]]:
+        """Return all prediction rows from predictions.csv without row filtering."""
 
         paths = get_paths(load_dotenv=True)
         predictions_path = paths.gold_datasets_dir / "predictions.csv"
@@ -677,152 +681,20 @@ def create_app() -> FastAPI:
         out = df.copy()
         out.columns = [str(c).replace("\ufeff", "").strip() for c in out.columns]
 
-        lower_to_name = {str(c).strip().lower(): str(c) for c in out.columns}
+        # Keep all available columns/rows, only normalize common date fields for API consistency.
+        for dt_col in ["feature_date", "prediction_date"]:
+            if dt_col in out.columns:
+                parsed = pd.to_datetime(out[dt_col], errors="coerce")
+                out[dt_col] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), out[dt_col])
 
-        def _col_name(name: str) -> str | None:
-            return lower_to_name.get(name.strip().lower())
+        if "created_at_utc" in out.columns:
+            out["created_at_utc"] = pd.to_datetime(out["created_at_utc"], errors="coerce", utc=True)
 
-        def _series_or_none(name: str) -> pd.Series | None:
-            col = _col_name(name)
-            if col is None:
-                return None
-            return out[col]
+        sort_cols = [c for c in ["prediction_date", "created_at_utc"] if c in out.columns]
+        if sort_cols:
+            out = out.sort_values(sort_cols)
 
-        def _parse_date_like(series: pd.Series) -> pd.Series:
-            parsed = pd.to_datetime(series, errors="coerce")
-            if parsed.notna().any():
-                return parsed
-            return pd.to_datetime(series, errors="coerce", dayfirst=True)
-
-        target_series = _series_or_none("target")
-        if target_series is not None:
-            out["target"] = target_series.apply(_normalize_prediction_target_label)
-        else:
-            out["target"] = None
-
-        feature_date_series = _series_or_none("feature_date")
-        if feature_date_series is not None:
-            out["feature_date"] = _parse_date_like(feature_date_series).dt.strftime(
-                "%Y-%m-%d"
-            )
-        else:
-            out["feature_date"] = None
-
-        prediction_date_series = _series_or_none("prediction_date")
-        if prediction_date_series is not None:
-            out["prediction_date"] = _parse_date_like(prediction_date_series).dt.strftime(
-                "%Y-%m-%d"
-            )
-        else:
-            out["prediction_date"] = None
-
-        prediction_series = _series_or_none("prediction")
-        if prediction_series is None:
-            raise HTTPException(
-                status_code=500,
-                detail="predictions.csv is missing required column: prediction",
-            )
-        out["prediction"] = prediction_series
-
-        def _row_prediction_to_bool(row: pd.Series) -> bool:
-            return _prediction_value_to_bool(
-                row.get("prediction"),
-                target=row.get("target"),
-            )
-
-        try:
-            out["prediction"] = out.apply(_row_prediction_to_bool, axis=1)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        minimal = out[["target", "feature_date", "prediction_date", "prediction"]].copy()
-        minimal["prediction_date_dt"] = pd.to_datetime(minimal["prediction_date"], errors="coerce")
-
-        def _find_col_ci(df_in: pd.DataFrame, preferred: list[str]) -> str | None:
-            lower_to_actual = {str(c).strip().lower(): str(c) for c in df_in.columns}
-            for token in preferred:
-                hit = lower_to_actual.get(token.strip().lower())
-                if hit is not None:
-                    return hit
-            return None
-
-        # Business rule: if latest known day is True, infer next day True when
-        # next-day noon weather is similar (temp within +/-4C) and no rain at noon.
-        latest_true = minimal.loc[
-            minimal["prediction"].astype(bool) & minimal["prediction_date_dt"].notna()
-        ].sort_values("prediction_date_dt")
-
-        if not latest_true.empty:
-            base = latest_true.iloc[-1]
-            base_day = pd.Timestamp(base["prediction_date_dt"]).normalize()
-            next_day = base_day + pd.Timedelta(days=1)
-
-            already_has_next_day = (minimal["prediction_date_dt"].dt.normalize() == next_day).any()
-
-            if not already_has_next_day:
-                weather_path = paths.gold_datasets_dir / "stuttgart_weather.csv"
-                if weather_path.exists():
-                    try:
-                        weather = pd.read_csv(weather_path)
-                        weather.columns = [str(c).replace("\ufeff", "").strip() for c in weather.columns]
-
-                        ts_col = _find_col_ci(weather, ["weather_time_local"])
-                        temp_col = _find_col_ci(weather, ["temperature_2m", "temperature", "temp_2m"])
-                        rain_col = _find_col_ci(weather, ["rain", "precipitation"])
-
-                        if ts_col is not None and temp_col is not None and rain_col is not None:
-                            weather[ts_col] = pd.to_datetime(weather[ts_col], errors="coerce")
-                            weather = weather.dropna(subset=[ts_col])
-                            weather = weather.loc[weather[ts_col].dt.hour == 12].copy()
-
-                            if not weather.empty:
-                                weather["day"] = weather[ts_col].dt.normalize()
-                                weather = weather.sort_values(ts_col)
-                                noon_by_day = weather.groupby("day", as_index=False).tail(1)
-
-                                base_noon = noon_by_day.loc[noon_by_day["day"] == base_day]
-                                next_noon = noon_by_day.loc[noon_by_day["day"] == next_day]
-
-                                if (not base_noon.empty) and (not next_noon.empty):
-                                    base_temp = pd.to_numeric(base_noon[temp_col], errors="coerce").iloc[-1]
-                                    next_temp = pd.to_numeric(next_noon[temp_col], errors="coerce").iloc[-1]
-                                    next_rain = pd.to_numeric(next_noon[rain_col], errors="coerce").iloc[-1]
-
-                                    similar_temp = pd.notna(base_temp) and pd.notna(next_temp) and (
-                                        abs(float(next_temp) - float(base_temp)) <= 4.0
-                                    )
-                                    no_rain = pd.notna(next_rain) and (float(next_rain) <= 0.0)
-
-                                    if similar_temp and no_rain:
-                                        feature_date_val: str | None = None
-                                        try:
-                                            base_feature_date = pd.to_datetime(base.get("feature_date"), errors="coerce")
-                                            if pd.notna(base_feature_date):
-                                                feature_date_val = (
-                                                    pd.Timestamp(base_feature_date).normalize() + pd.Timedelta(days=1)
-                                                ).strftime("%Y-%m-%d")
-                                        except Exception:
-                                            feature_date_val = None
-
-                                        inferred = pd.DataFrame(
-                                            [
-                                                {
-                                                    "target": base.get("target"),
-                                                    "feature_date": feature_date_val,
-                                                    "prediction_date": next_day.strftime("%Y-%m-%d"),
-                                                    "prediction": True,
-                                                    "prediction_date_dt": next_day,
-                                                }
-                                            ]
-                                        )
-                                        minimal = pd.concat([minimal, inferred], ignore_index=True)
-                    except Exception:
-                        # Never fail endpoint on optional inferred-next-day enhancement.
-                        pass
-
-        minimal = minimal.sort_values("prediction_date_dt", na_position="last")
-        minimal = minimal[["target", "feature_date", "prediction_date", "prediction"]].copy()
-        return _rows_to_json_records(minimal)
+        return _rows_to_json_records(out)
 
     return app
 
