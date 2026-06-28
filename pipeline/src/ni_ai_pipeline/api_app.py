@@ -147,6 +147,45 @@ def _add_dry_spell_features(df: pd.DataFrame, date_col: str = "date") -> pd.Data
     return df
 
 
+def _load_daily_sun_hours_from_hourly(paths: PathConfig) -> pd.DataFrame | None:
+    """Build daily sunshine hours from hourly SD_SO (minutes per hour).
+
+    This is used by the plot endpoint only to avoid inflated totals from upstream
+    duplicates in pre-aggregated daily datasets.
+    """
+
+    sun_path = paths.silver_weather_dir / "clean_schnarrenberg_dwd_sun.csv"
+    if not sun_path.exists():
+        return None
+
+    try:
+        sun = pd.read_csv(sun_path)
+    except Exception:
+        return None
+
+    sun.columns = [str(c).strip().upper() for c in sun.columns]
+    if "DATUM" not in sun.columns or "SD_SO" not in sun.columns:
+        return None
+
+    sun["DATUM"] = pd.to_datetime(sun["DATUM"], errors="coerce")
+    sun["SD_SO"] = pd.to_numeric(sun["SD_SO"], errors="coerce")
+    sun = sun.dropna(subset=["DATUM", "SD_SO"]).copy()
+    if sun.empty:
+        return None
+
+    # Keep one value per hourly timestamp before daily aggregation.
+    sun = sun.sort_values("DATUM")
+    sun = sun.drop_duplicates(subset=["DATUM"], keep="last")
+
+    daily = (
+        sun.assign(date=sun["DATUM"].dt.normalize())
+        .groupby("date", as_index=False)["SD_SO"]
+        .sum(min_count=1)
+    )
+    daily["SD_SO_hours_day"] = daily["SD_SO"] / 60.0
+    return daily[["date", "SD_SO_hours_day"]]
+
+
 def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     """Load + merge weather+masterdata like `scripts/gold/june_gold_feature_graphs.ipynb`."""
 
@@ -217,9 +256,19 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     if wq is not None:
         df = df.merge(wq, on="date", how="left")
 
-    # Plot-only convenience metric: convert daily sunshine duration minutes to hours/day.
+    # Plot-only fallback: convert pre-aggregated daily sunshine minutes to hours/day.
     if "SD_SO_sum" in df.columns:
         df["SD_SO_hours_day"] = pd.to_numeric(df["SD_SO_sum"], errors="coerce") / 60.0
+
+    # Prefer recomputed hours/day from deduplicated hourly SD_SO when available.
+    sun_daily = _load_daily_sun_hours_from_hourly(paths)
+    if sun_daily is not None and not sun_daily.empty:
+        df = df.merge(sun_daily, on="date", how="left", suffixes=("", "_from_hourly"))
+        if "SD_SO_hours_day_from_hourly" in df.columns:
+            df["SD_SO_hours_day"] = df["SD_SO_hours_day_from_hourly"].combine_first(
+                df.get("SD_SO_hours_day")
+            )
+            df = df.drop(columns=["SD_SO_hours_day_from_hourly"], errors="ignore")
 
     return df
 
