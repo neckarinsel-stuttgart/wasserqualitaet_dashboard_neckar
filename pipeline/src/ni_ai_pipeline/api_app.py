@@ -19,7 +19,7 @@ TEMP_REQUESTED: list[str] = [
     "TT_TU_mean",
     "RF_TU_mean",
     "R1_sum",
-    "SD_SO_sum",
+    "SD_SO_mean",
 ]
 
 WQ_REQUESTED_0_10: list[str] = [
@@ -30,7 +30,7 @@ WQ_REQUESTED_0_10: list[str] = [
 
 WQ_REQUESTED_RAW_SAME_AXIS: list[str] = [
     "pH_wert",
-    "ABSF_STD_mean",
+    "RF_TU_mean",
 ]
 
 REQUESTED: list[str] = [
@@ -64,7 +64,8 @@ ALIASES: dict[str, str] = {
     "luftfeuchtigkeit": "RF_TU_mean",
     "humidity": "RF_TU_mean",
     "rain_sum": "R1_sum",
-    "sun_hours_sum": "SD_SO_sum",
+    "sun_hours_sum": "SD_SO_mean",
+    "sun_hours_avg": "SD_SO_mean",
 }
 
 
@@ -359,7 +360,8 @@ def create_app() -> FastAPI:
         requested_flat = _flatten_requested(REQUESTED)
         resolved = [ALIASES.get(name, name) for name in requested_flat]
 
-        plot_cols = [c for c in resolved if c in df.columns]
+        # Keep insertion order while removing duplicates.
+        plot_cols = list(dict.fromkeys(c for c in resolved if c in df.columns))
 
         # Cap turbidity at 25 like the notebook (prevents spikes dominating).
         turb_col = "Ho_Ne_Truebung,quantitativ"
