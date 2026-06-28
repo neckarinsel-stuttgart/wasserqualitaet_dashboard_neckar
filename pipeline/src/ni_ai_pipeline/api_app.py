@@ -18,7 +18,7 @@ TEMP_REQUESTED: list[str] = [
     "Ho_Ne_Temperatur",
     "TT_TU_mean",
     "RF_TU_mean",
-    "R1_sum",
+    "R1_mm_day",
     "SD_SO_hours_day",
 ]
 
@@ -63,7 +63,10 @@ ALIASES: dict[str, str] = {
     "Luftfeuchtigkeit": "RF_TU_mean",
     "luftfeuchtigkeit": "RF_TU_mean",
     "humidity": "RF_TU_mean",
-    "rain_sum": "R1_sum",
+    "rain_sum": "R1_mm_day",
+    "rain_day": "R1_mm_day",
+    "R1_sum": "R1_mm_day",
+    "R1_mm_day": "R1_mm_day",
     "sun_hours_sum": "SD_SO_hours_day",
     "sun_hours_avg": "SD_SO_hours_day",
     "sun_hours_day": "SD_SO_hours_day",
@@ -186,6 +189,45 @@ def _load_daily_sun_hours_from_hourly(paths: PathConfig) -> pd.DataFrame | None:
     return daily[["date", "SD_SO_hours_day"]]
 
 
+def _load_daily_rain_mm_from_hourly(paths: PathConfig) -> pd.DataFrame | None:
+    """Build daily rain totals (mm/day) from hourly R1.
+
+    This is used by the plot endpoint only to avoid inflated totals from upstream
+    duplicates in pre-aggregated daily datasets.
+    """
+
+    rain_path = paths.silver_weather_dir / "clean_schnarrenberg_dwd_regen.csv"
+    if not rain_path.exists():
+        return None
+
+    try:
+        rain = pd.read_csv(rain_path)
+    except Exception:
+        return None
+
+    rain.columns = [str(c).strip().upper() for c in rain.columns]
+    if "DATUM" not in rain.columns or "R1" not in rain.columns:
+        return None
+
+    rain["DATUM"] = pd.to_datetime(rain["DATUM"], errors="coerce")
+    rain["R1"] = pd.to_numeric(rain["R1"], errors="coerce")
+    rain = rain.dropna(subset=["DATUM", "R1"]).copy()
+    if rain.empty:
+        return None
+
+    # Keep one value per hourly timestamp before daily aggregation.
+    rain = rain.sort_values("DATUM")
+    rain = rain.drop_duplicates(subset=["DATUM"], keep="last")
+
+    daily = (
+        rain.assign(date=rain["DATUM"].dt.normalize())
+        .groupby("date", as_index=False)["R1"]
+        .sum(min_count=1)
+    )
+    daily["R1_mm_day"] = daily["R1"]
+    return daily[["date", "R1_mm_day"]]
+
+
 def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     """Load + merge weather+masterdata like `scripts/gold/june_gold_feature_graphs.ipynb`."""
 
@@ -260,6 +302,10 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     if "SD_SO_sum" in df.columns:
         df["SD_SO_hours_day"] = pd.to_numeric(df["SD_SO_sum"], errors="coerce") / 60.0
 
+    # Plot-only fallback: use pre-aggregated daily rain sum as mm/day.
+    if "R1_sum" in df.columns:
+        df["R1_mm_day"] = pd.to_numeric(df["R1_sum"], errors="coerce")
+
     # Prefer recomputed hours/day from deduplicated hourly SD_SO when available.
     sun_daily = _load_daily_sun_hours_from_hourly(paths)
     if sun_daily is not None and not sun_daily.empty:
@@ -269,6 +315,14 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
                 df.get("SD_SO_hours_day")
             )
             df = df.drop(columns=["SD_SO_hours_day_from_hourly"], errors="ignore")
+
+    # Prefer recomputed rain mm/day from deduplicated hourly R1 when available.
+    rain_daily = _load_daily_rain_mm_from_hourly(paths)
+    if rain_daily is not None and not rain_daily.empty:
+        df = df.merge(rain_daily, on="date", how="left", suffixes=("", "_from_hourly"))
+        if "R1_mm_day_from_hourly" in df.columns:
+            df["R1_mm_day"] = df["R1_mm_day_from_hourly"].combine_first(df.get("R1_mm_day"))
+            df = df.drop(columns=["R1_mm_day_from_hourly"], errors="ignore")
 
     return df
 
