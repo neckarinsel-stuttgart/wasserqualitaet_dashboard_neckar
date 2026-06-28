@@ -298,6 +298,12 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     if wq is not None:
         df = df.merge(wq, on="date", how="left")
 
+    # Ensure plot schema stays stable even when source files have gaps.
+    if "SD_SO_hours_day" not in df.columns:
+        df["SD_SO_hours_day"] = np.nan
+    if "R1_mm_day" not in df.columns:
+        df["R1_mm_day"] = np.nan
+
     # Plot-only fallback: convert pre-aggregated daily sunshine minutes to hours/day.
     if "SD_SO_sum" in df.columns:
         df["SD_SO_hours_day"] = pd.to_numeric(df["SD_SO_sum"], errors="coerce") / 60.0
