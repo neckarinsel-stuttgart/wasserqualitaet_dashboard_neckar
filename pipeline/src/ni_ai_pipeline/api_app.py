@@ -19,7 +19,7 @@ TEMP_REQUESTED: list[str] = [
     "TT_TU_mean",
     "RF_TU_mean",
     "R1_sum",
-    "SD_SO_mean",
+    "sun_hours_day",
 ]
 
 WQ_REQUESTED_0_10: list[str] = [
@@ -64,8 +64,9 @@ ALIASES: dict[str, str] = {
     "luftfeuchtigkeit": "RF_TU_mean",
     "humidity": "RF_TU_mean",
     "rain_sum": "R1_sum",
-    "sun_hours_sum": "SD_SO_mean",
-    "sun_hours_avg": "SD_SO_mean",
+    "sun_hours_sum": "sun_hours_day",
+    "sun_hours_avg": "sun_hours_day",
+    "sun_hours_day": "sun_hours_day",
 }
 
 
@@ -214,6 +215,10 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     df = weather.copy()
     if wq is not None:
         df = df.merge(wq, on="date", how="left")
+
+    # Plot-only convenience metric: convert daily sunshine duration minutes to hours/day.
+    if "SD_SO_sum" in df.columns:
+        df["sun_hours_day"] = pd.to_numeric(df["SD_SO_sum"], errors="coerce") / 60.0
 
     return df
 
