@@ -17,6 +17,9 @@ TEMP_REQUESTED: list[str] = [
     "V_TE050_mean",
     "Ho_Ne_Temperatur",
     "TT_TU_mean",
+    "RF_TU_mean",
+    "R1_sum",
+    "SD_SO_sum",
 ]
 
 WQ_REQUESTED_0_10: list[str] = [
@@ -56,6 +59,12 @@ ALIASES: dict[str, str] = {
     "PH_Wert": "pH_wert",
     "pH_Wert": "pH_wert",
     "Sauerstoffgehalt": "Sauerstoff",
+    # weather naming variants
+    "Luftfeuchtigkeit": "RF_TU_mean",
+    "luftfeuchtigkeit": "RF_TU_mean",
+    "humidity": "RF_TU_mean",
+    "rain_sum": "R1_sum",
+    "sun_hours_sum": "SD_SO_sum",
 }
 
 
