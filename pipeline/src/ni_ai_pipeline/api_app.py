@@ -588,7 +588,7 @@ def create_app() -> FastAPI:
 
     @app.get("/get_current_weather")
     def get_current_weather() -> dict[str, Any]:
-        """Return Stuttgart weather row for the current local hour."""
+        """Return Stuttgart weather row for today's maximum temperature."""
 
         paths = get_paths(load_dotenv=True)
         weather_path = paths.gold_datasets_dir / "stuttgart_weather.csv"
@@ -623,36 +623,61 @@ def create_app() -> FastAPI:
             if not tz_values.empty:
                 timezone = tz_values.iloc[-1]
 
-        now_local_hour = pd.Timestamp.now(tz=timezone).tz_localize(None).replace(
-            minute=0, second=0, microsecond=0
-        )
+        today_local = pd.Timestamp.now(tz=timezone).tz_localize(None).normalize()
 
         df["weather_time_local"] = pd.to_datetime(df["weather_time_local"], errors="coerce")
         df = df.dropna(subset=["weather_time_local"])
         if df.empty:
             raise HTTPException(status_code=404, detail="No valid weather_time_local rows found")
 
-        current_rows = df.loc[df["weather_time_local"] == now_local_hour].copy()
-        if current_rows.empty:
+        today_rows = df.loc[df["weather_time_local"].dt.normalize() == today_local].copy()
+        if today_rows.empty:
             raise HTTPException(
                 status_code=404,
-                detail=f"No weather row for current hour: {now_local_hour.strftime('%Y-%m-%d %H:00:00')}",
+                detail=f"No weather rows for current day: {today_local.strftime('%Y-%m-%d')}",
+            )
+
+        temp_col = None
+        for candidate in ["temperature_2m"]:
+            if candidate in today_rows.columns:
+                temp_col = candidate
+                break
+
+        if temp_col is None:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "stuttgart_weather.csv is missing a supported temperature column "
+                    "(temperature_2m/apparent_temperature/TT_TU_mean/Ho_Ne_Temperatur)"
+                ),
+            )
+
+        today_rows[temp_col] = pd.to_numeric(today_rows[temp_col], errors="coerce")
+        today_rows = today_rows.dropna(subset=[temp_col])
+        if today_rows.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No valid {temp_col} rows for current day: {today_local.strftime('%Y-%m-%d')}",
             )
 
         sort_cols = ["weather_time_local"]
-        if "created_at_utc" in current_rows.columns:
-            current_rows["created_at_utc"] = pd.to_datetime(
-                current_rows["created_at_utc"], errors="coerce", utc=True
+        if "created_at_utc" in today_rows.columns:
+            today_rows["created_at_utc"] = pd.to_datetime(
+                today_rows["created_at_utc"], errors="coerce", utc=True
             )
             sort_cols.append("created_at_utc")
 
-        latest = current_rows.sort_values(sort_cols).iloc[-1]
+        max_temp = today_rows[temp_col].max()
+        max_rows = today_rows.loc[today_rows[temp_col] == max_temp].copy()
+        latest = max_rows.sort_values(sort_cols).iloc[-1]
 
         payload = {
             str(k): _json_compatible_value(v)
             for k, v in latest.to_dict().items()
         }
-        payload["weather_time_local"] = now_local_hour.strftime("%Y-%m-%d %H:%M:%S")
+        payload["weather_time_local"] = pd.Timestamp(latest["weather_time_local"]).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
 
         return payload
 
@@ -760,12 +785,32 @@ def create_app() -> FastAPI:
                 detail=f"No weather rows for next day: {tomorrow.strftime('%Y-%m-%d')}",
             )
 
+        temp_col = "temperature_2m"
+        if temp_col not in next_day_rows.columns:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "stuttgart_weather.csv is missing required column: temperature_2m"
+                ),
+            )
+
+        next_day_rows[temp_col] = pd.to_numeric(next_day_rows[temp_col], errors="coerce")
+        next_day_rows = next_day_rows.dropna(subset=[temp_col])
+        if next_day_rows.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No valid {temp_col} rows for next day: {tomorrow.strftime('%Y-%m-%d')}",
+            )
+
         sort_cols = ["weather_time_local"]
         if "created_at_utc" in next_day_rows.columns:
             next_day_rows["created_at_utc"] = pd.to_datetime(
                 next_day_rows["created_at_utc"], errors="coerce", utc=True
             )
             sort_cols.append("created_at_utc")
+
+        max_temp = next_day_rows[temp_col].max()
+        next_day_rows[temp_col] = max_temp
 
         next_day_rows = next_day_rows.sort_values(sort_cols)
         next_day_rows["weather_time_local"] = pd.to_datetime(
