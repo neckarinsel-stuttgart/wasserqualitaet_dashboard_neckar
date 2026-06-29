@@ -250,6 +250,15 @@ def _ecoli_prediction_to_bool(value: object, *, ecoli_threshold: float = 1000.0)
     return bool(float(numeric) <= float(ecoli_threshold))
 
 
+def _standardize_prediction_date_columns(table: pd.DataFrame) -> pd.DataFrame:
+    out = table.copy()
+    for col in ["feature_date", "prediction_date"]:
+        if col in out.columns:
+            parsed = pd.to_datetime(out[col], errors="coerce")
+            out[col] = parsed.dt.strftime("%Y-%m-%d 00:00:00").where(parsed.notna(), out[col])
+    return out
+
+
 def _backfill_midnight_predictions(
     *,
     site_id: str,
@@ -344,8 +353,8 @@ def _backfill_midnight_predictions(
             {
                 "site_id": row_site_id,
                 "target": output_target,
-                "feature_date": feature_date.strftime("%Y-%m-%d"),
-                "prediction_date": prediction_date.strftime("%Y-%m-%d"),
+                "feature_date": feature_date.strftime("%Y-%m-%d 00:00:00"),
+                "prediction_date": prediction_date.strftime("%Y-%m-%d 00:00:00"),
                 "prediction": pred_value,
                 "model_name": str(metadata.get("best_model", "unknown")),
                 "model_path": str(model_path),
@@ -373,6 +382,7 @@ def _backfill_midnight_predictions(
     merged = pd.concat([pred_existing, add_df], ignore_index=True)
     merged = merged.drop_duplicates(subset=["site_id", "target", "prediction_date"], keep="last")
     merged = merged.sort_values(["prediction_date", "site_id", "target"])
+    merged = _standardize_prediction_date_columns(merged)
 
     if not dry_run:
         predictions_path.parent.mkdir(parents=True, exist_ok=True)

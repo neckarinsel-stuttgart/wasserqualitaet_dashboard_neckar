@@ -13,6 +13,22 @@ from ni_ai_pipeline.training.ecoli_predictability import (
 )
 
 
+def _format_midnight_timestamp(value: object) -> str:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        raise RuntimeError(f"Could not parse date value: {value!r}")
+    return pd.Timestamp(ts).strftime("%Y-%m-%d 00:00:00")
+
+
+def _standardize_prediction_date_columns(table: pd.DataFrame) -> pd.DataFrame:
+    out = table.copy()
+    for col in ["feature_date", "prediction_date"]:
+        if col in out.columns:
+            parsed = pd.to_datetime(out[col], errors="coerce")
+            out[col] = parsed.dt.strftime("%Y-%m-%d 00:00:00").where(parsed.notna(), out[col])
+    return out
+
+
 def _normalize_date_col(df: pd.DataFrame, *, date_col: str = "date") -> pd.DataFrame:
     out = df.copy()
     out[date_col] = pd.to_datetime(out[date_col], errors="coerce").dt.tz_localize(None).dt.normalize()
@@ -140,8 +156,8 @@ def predict_latest_and_upsert(
             {
                 "site_id": row_site_id,
                 "target": output_target,
-                "feature_date": pd.Timestamp(feature_date_ts).strftime("%Y-%m-%d"),
-                "prediction_date": prediction_date_ts.strftime("%Y-%m-%d"),
+                "feature_date": _format_midnight_timestamp(feature_date_ts),
+                "prediction_date": _format_midnight_timestamp(prediction_date_ts),
                 "prediction": prediction_bool,
                 "model_name": best_model,
                 "model_path": str(model_path),
@@ -170,6 +186,8 @@ def predict_latest_and_upsert(
 
     if "prediction_date" in table.columns:
         table = table.sort_values(["prediction_date", "site_id", "target"])
+
+    table = _standardize_prediction_date_columns(table)
 
     table.to_csv(predictions_path, index=False)
 

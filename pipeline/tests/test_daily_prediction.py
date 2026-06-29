@@ -72,7 +72,7 @@ def test_predict_latest_and_upsert(tmp_path: Path) -> None:
 
     out = pd.read_csv(predictions_path)
     assert len(out) == 1
-    assert str(out.loc[0, "prediction_date"]) == "2026-06-20"
+    assert str(out.loc[0, "prediction_date"]) == "2026-06-20 00:00:00"
     assert str(out.loc[0, "target"]) == "ecoli"
     assert bool(out.loc[0, "prediction"]) is True
 
