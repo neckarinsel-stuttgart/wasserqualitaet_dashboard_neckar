@@ -558,9 +558,9 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        latest_date = pd.Timestamp(latest["prediction_date"]).normalize()
-        today = pd.Timestamp.now().normalize()
-        is_current_day = bool(latest_date == today)
+        latest_date = pd.Timestamp(latest["prediction_date"])
+        today = pd.Timestamp.now()
+        is_current_day = bool(latest_date.date() == today.date())
 
         payload: dict[str, Any] = {
             "prediction": prediction_bool,
@@ -572,7 +572,7 @@ def create_app() -> FastAPI:
         if "target" in latest.index:
             payload["target"] = _normalize_prediction_target_label(latest["target"])
 
-        day_after_date = pd.Timestamp(latest["prediction_date"]).normalize() + pd.Timedelta(days=1)
+        day_after_date = pd.Timestamp(latest["prediction_date"]) + pd.Timedelta(days=1)
         payload["prediction_day_after_date"] = day_after_date.strftime("%Y-%m-%d")
 
         if prediction_bool is False:
