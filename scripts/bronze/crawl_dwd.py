@@ -88,6 +88,7 @@ CATEGORIES = {
     "soil_temperature": "boden",
     "solar": "strahlung",
     "sun": "sun",  # sunshine duration
+    "precipitation": "regen",  # keep legacy filename compatibility
 }
 ID_MIN = 4926
 ID_MAX = 4933

@@ -196,8 +196,12 @@ def _load_daily_rain_mm_from_hourly(paths: PathConfig) -> pd.DataFrame | None:
     duplicates in pre-aggregated daily datasets.
     """
 
-    rain_path = paths.silver_weather_dir / "clean_schnarrenberg_dwd_regen.csv"
-    if not rain_path.exists():
+    rain_candidates = [
+        paths.silver_weather_dir / "clean_schnarrenberg_dwd_regen.csv",
+        paths.silver_weather_dir / "clean_schnarrenberg_dwd_niederschlag.csv",
+    ]
+    rain_path = next((p for p in rain_candidates if p.exists()), None)
+    if rain_path is None:
         return None
 
     try:
