@@ -652,12 +652,23 @@ def create_app() -> FastAPI:
                 ),
             )
 
+        wind_col = "wind_speed_10m"
+        if wind_col not in today_rows.columns:
+            raise HTTPException(
+                status_code=500,
+                detail="stuttgart_weather.csv is missing required column: wind_speed_10m",
+            )
+
         today_rows[temp_col] = pd.to_numeric(today_rows[temp_col], errors="coerce")
-        today_rows = today_rows.dropna(subset=[temp_col])
+        today_rows[wind_col] = pd.to_numeric(today_rows[wind_col], errors="coerce")
+        today_rows = today_rows.dropna(subset=[temp_col, wind_col])
         if today_rows.empty:
             raise HTTPException(
                 status_code=404,
-                detail=f"No valid {temp_col} rows for current day: {today_local.strftime('%Y-%m-%d')}",
+                detail=(
+                    f"No valid {temp_col}/{wind_col} rows for current day: "
+                    f"{today_local.strftime('%Y-%m-%d')}"
+                ),
             )
 
         sort_cols = ["weather_time_local"]
@@ -670,11 +681,13 @@ def create_app() -> FastAPI:
         max_temp = today_rows[temp_col].max()
         max_rows = today_rows.loc[today_rows[temp_col] == max_temp].copy()
         latest = max_rows.sort_values(sort_cols).iloc[-1]
+        max_wind = today_rows[wind_col].max()
 
         payload = {
             str(k): _json_compatible_value(v)
             for k, v in latest.to_dict().items()
         }
+        payload[wind_col] = _json_compatible_value(max_wind)
         payload["weather_time_local"] = pd.Timestamp(latest["weather_time_local"]).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
@@ -794,12 +807,25 @@ def create_app() -> FastAPI:
                 ),
             )
 
+        wind_col = "wind_speed_10m"
+        if wind_col not in next_day_rows.columns:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "stuttgart_weather.csv is missing required column: wind_speed_10m"
+                ),
+            )
+
         next_day_rows[temp_col] = pd.to_numeric(next_day_rows[temp_col], errors="coerce")
-        next_day_rows = next_day_rows.dropna(subset=[temp_col])
+        next_day_rows[wind_col] = pd.to_numeric(next_day_rows[wind_col], errors="coerce")
+        next_day_rows = next_day_rows.dropna(subset=[temp_col, wind_col])
         if next_day_rows.empty:
             raise HTTPException(
                 status_code=404,
-                detail=f"No valid {temp_col} rows for next day: {tomorrow.strftime('%Y-%m-%d')}",
+                detail=(
+                    f"No valid {temp_col}/{wind_col} rows for next day: "
+                    f"{tomorrow.strftime('%Y-%m-%d')}"
+                ),
             )
 
         sort_cols = ["weather_time_local"]
@@ -811,6 +837,8 @@ def create_app() -> FastAPI:
 
         max_temp = next_day_rows[temp_col].max()
         next_day_rows[temp_col] = max_temp
+        max_wind = next_day_rows[wind_col].max()
+        next_day_rows[wind_col] = max_wind
 
         next_day_rows = next_day_rows.sort_values(sort_cols)
         next_day_rows["weather_time_local"] = pd.to_datetime(
