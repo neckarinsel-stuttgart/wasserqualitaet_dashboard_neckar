@@ -54,6 +54,9 @@ def _remove_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
         "MESS_DATUM_BEG",
         "MESS_DATUM_ANFANG",
     ]
+    # Drop quality-level and previously suffixed duplicate columns that cause
+    # repeated merge collisions across category files.
+    cols_to_drop.extend([c for c in df.columns if c.startswith("QN_") or c.endswith("_Y")])
     return df.drop(columns=cols_to_drop, errors="ignore")
 
 
@@ -103,7 +106,7 @@ def _create_cleans(paths: PathConfig) -> None:
 
 
 def _create_master(paths: PathConfig) -> pd.DataFrame:
-    all_files = glob.glob(str(paths.silver_weather_dir / "clean_schnarrenberg_dwd*.csv"))
+    all_files = sorted(glob.glob(str(paths.silver_weather_dir / "clean_schnarrenberg_dwd*.csv")))
     if not all_files:
         raise FileNotFoundError(f"No cleaned DWD files found in: {paths.silver_weather_dir}")
 
@@ -118,6 +121,13 @@ def _create_master(paths: PathConfig) -> pd.DataFrame:
         if not df_new.empty:
             max_dates.append(df_new["DATUM"].max())
         df_new = df_new.set_index("DATUM")
+
+        # Ensure one row per timestamp to avoid cartesian merge explosions.
+        df_new.index = pd.to_datetime(df_new.index, errors="coerce")
+        df_new = df_new[~df_new.index.isna()].copy()
+        df_new = df_new.sort_index()
+        df_new = df_new[~df_new.index.duplicated(keep="last")].copy()
+
         prepared.append(df_new)
 
     if not max_dates:
@@ -128,14 +138,11 @@ def _create_master(paths: PathConfig) -> pd.DataFrame:
     merged = pd.DataFrame(index=date_range)
 
     for df_new in prepared:
-        merged = pd.merge(
-            merged,
-            df_new,
-            how="left",
-            left_index=True,
-            right_index=True,
-            suffixes=("", "_y"),
-        )
+        # Keep first-seen column names and skip repeated duplicates from other files.
+        overlap = [c for c in df_new.columns if c in merged.columns]
+        if overlap:
+            df_new = df_new.drop(columns=overlap, errors="ignore")
+        merged = merged.join(df_new, how="left")
 
     return merged
 

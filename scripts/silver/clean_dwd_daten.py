@@ -88,8 +88,6 @@ def create_cleans() -> None:
     if not all_files:
         raise FileNotFoundError(f'No DWD files found in: {BRONZE_DWD_DIR}')
 
-    # Skip known non-raw artifacts (already aggregated/feature files)
-    all_files = [f for f in all_files if 'regen_rollups' not in Path(f).name.lower()]
 
     for file in all_files:
         try:
