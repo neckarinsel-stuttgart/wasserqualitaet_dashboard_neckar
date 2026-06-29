@@ -548,12 +548,7 @@ def create_app() -> FastAPI:
         if df.empty:
             raise HTTPException(status_code=404, detail="No valid prediction_date rows found")
 
-        sort_cols = ["prediction_date"]
-        if "created_at_utc" in df.columns:
-            df["created_at_utc"] = pd.to_datetime(df["created_at_utc"], errors="coerce", utc=True)
-            sort_cols.append("created_at_utc")
-
-        latest = df.sort_values(sort_cols).iloc[-1]
+        latest = df.sort_values(["prediction_date"]).iloc[-1]
 
         try:
             prediction_bool = _prediction_value_to_bool(
@@ -905,12 +900,8 @@ def create_app() -> FastAPI:
         ]
         out = out.drop(columns=[c for c in drop_cols if c in out.columns])
 
-        if "created_at_utc" in out.columns:
-            out["created_at_utc"] = pd.to_datetime(out["created_at_utc"], errors="coerce", utc=True)
-
-        sort_cols = [c for c in ["prediction_date", "created_at_utc"] if c in out.columns]
-        if sort_cols:
-            out = out.sort_values(sort_cols)
+        if "prediction_date" in out.columns:
+            out = out.sort_values(["prediction_date"])
 
         return _rows_to_json_records(out)
 
