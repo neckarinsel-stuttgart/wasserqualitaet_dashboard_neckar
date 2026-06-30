@@ -232,6 +232,73 @@ def _load_daily_rain_mm_from_hourly(paths: PathConfig) -> pd.DataFrame | None:
     return daily[["date", "R1_mm_day"]]
 
 
+def _coalesce_numeric_columns(df: pd.DataFrame, candidates: list[str]) -> pd.Series:
+    out = pd.Series(np.nan, index=df.index, dtype=float)
+    for col in candidates:
+        if col in df.columns:
+            out = out.combine_first(pd.to_numeric(df[col], errors="coerce"))
+    return out
+
+
+def _build_masterdata_plot_wq(md: pd.DataFrame) -> pd.DataFrame | None:
+    if "zeit" not in md.columns:
+        return None
+
+    out = pd.DataFrame()
+    out["date"] = pd.to_datetime(md["zeit"], errors="coerce").dt.tz_localize(None)
+    out["date"] = out["date"].dt.normalize()
+
+    column_candidates: dict[str, list[str]] = {
+        "ecoli": ["ecoli_mean"],
+        "entro": ["entro_mean"],
+        "We_Ne_ElektrischeLeitfaehigkeit": [
+            "We_Ne_ElektrischeLeitfaehigkeit_mean",
+            "Ho_Ne_ElektrischeLeitfaehigkeit_mean",
+            "ElektrischeLeitfaehigkeit_mean",
+        ],
+        "Sauerstoff": [
+            "We_Ne_Sauerstoff_mean",
+            "Ho_Ne_Sauerstoff_mean",
+            "Sauerstoff_mean",
+            "Ho_Ne_Sauerstoffgehalt,gelöst_mean",
+            "Ho_Ne_Sauerstoffgehalt,gelÃ¶st_mean",
+            "Ho_Ne_Sauerstoffgehalt_geloest_mean",
+        ],
+        "Ho_Ne_Temperatur": [
+            "Ho_Ne_Temperatur_mean",
+            "We_Ne_Temperatur_mean",
+            "Temperatur_mean",
+        ],
+        "Ho_Ne_Truebung,quantitativ": [
+            "Ho_Ne_Truebung,quantitativ_mean",
+            "We_Ne_Truebung,quantitativ_mean",
+            "Truebung,quantitativ_mean",
+            "Trübung,quantitativ_mean",
+            "TrÃ¼bung,quantitativ_mean",
+        ],
+        "pH_wert": [
+            "We_Ne_pH-Wert_mean",
+            "Ho_Ne_pH-Wert_mean",
+            "We_Ne_pH_Wert_mean",
+            "Ho_Ne_pH_Wert_mean",
+            "pH_wert_mean",
+            "pH_Wert_mean",
+        ],
+    }
+
+    for output_col, candidates in column_candidates.items():
+        out[output_col] = _coalesce_numeric_columns(md, candidates)
+
+    out = out.dropna(subset=["date"]).sort_values("date")
+    value_cols = [c for c in out.columns if c != "date"]
+    if not value_cols or out[value_cols].notna().sum().sum() == 0:
+        return None
+
+    out = out.groupby("date", as_index=False).last()
+    out[value_cols] = out[value_cols].ffill().bfill()
+    return out
+
+
 def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     """Load + merge weather+masterdata like `scripts/gold/june_gold_feature_graphs.ipynb`."""
 
@@ -253,7 +320,8 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
     masterdata_path = paths.gold_datasets_dir / "masterdata.csv"
     if masterdata_path.exists():
         md = pd.read_csv(masterdata_path)
-        if "zeit" in md.columns:
+        wq = _build_masterdata_plot_wq(md)
+        if wq is None and "zeit" in md.columns:
             md["date"] = pd.to_datetime(md["zeit"], errors="coerce").dt.tz_localize(None)
             md["date"] = md["date"].dt.normalize()
 
@@ -300,7 +368,12 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
 
     df = weather.copy()
     if wq is not None:
-        df = df.merge(wq, on="date", how="left")
+        df = pd.merge_asof(
+            df.sort_values("date"),
+            wq.sort_values("date"),
+            on="date",
+            direction="backward",
+        )
 
     # Ensure plot schema stays stable even when source files have gaps.
     if "SD_SO_hours_day" not in df.columns:
@@ -333,6 +406,21 @@ def _load_gold_plot_dataframe(paths: PathConfig) -> pd.DataFrame:
         if "R1_mm_day_from_hourly" in df.columns:
             df["R1_mm_day"] = df["R1_mm_day_from_hourly"].combine_first(df.get("R1_mm_day"))
             df = df.drop(columns=["R1_mm_day_from_hourly"], errors="ignore")
+
+    wq_plot_cols = [
+        "ecoli",
+        "entro",
+        "We_Ne_ElektrischeLeitfaehigkeit",
+        "Sauerstoff",
+        "Ho_Ne_Temperatur",
+        "Ho_Ne_Truebung,quantitativ",
+        "pH_wert",
+    ]
+    for col in wq_plot_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").ffill().bfill()
+
+    df["SD_SO_hours_day"] = pd.to_numeric(df["SD_SO_hours_day"], errors="coerce").fillna(0.0)
 
     return df
 
