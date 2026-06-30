@@ -3,16 +3,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from ni_ai_pipeline.paths import get_paths
+from ni_ai_pipeline.paths import PathConfig, get_paths
 from ni_ai_pipeline.steps.gold_daily_dataset import build_daily_gold_dataset
 from ni_ai_pipeline.steps.gold_data_full import build_data_full
 from ni_ai_pipeline.steps.gold_masterdata import build_masterdata_daily
 from ni_ai_pipeline.steps.gold_stuttgart_weather import pull_stuttgart_weather_hourly
 from ni_ai_pipeline.steps.silver_messungen import build_messungen_komplett
 from ni_ai_pipeline.steps.silver_weather import build_silver_weather
-from ni_ai_pipeline.training.ecoli_predictability import train_ecoli_predictability
-from ni_ai_pipeline.training.ecoli_predictability import load_model_metadata
 from ni_ai_pipeline.training.daily_prediction import predict_latest_and_upsert
+from ni_ai_pipeline.training.ecoli_predictability import load_model_metadata
+from ni_ai_pipeline.training.ecoli_predictability import train_ecoli_predictability
 
 
 def _needs_classifier_retrain(model_path: Path, model_metadata_path: Path) -> bool:
@@ -25,6 +25,28 @@ def _needs_classifier_retrain(model_path: Path, model_metadata_path: Path) -> bo
         return True
 
     return str(metadata.get("task")) != "binary_classification"
+
+
+def _build_silver_gold(paths: PathConfig) -> None:
+    build_silver_weather(paths)
+    build_messungen_komplett(paths)
+    build_data_full(paths)
+    build_masterdata_daily(paths)
+    build_daily_gold_dataset(paths)
+
+
+def _ensure_classifier_artifacts(
+    paths: PathConfig,
+    *,
+    model_path: Path,
+    model_metadata_path: Path,
+) -> None:
+    if _needs_classifier_retrain(model_path, model_metadata_path):
+        print(
+            "Model artifacts missing; training once before first prediction "
+            f"({model_path}, {model_metadata_path})."
+        )
+        train_ecoli_predictability(paths)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -165,6 +187,13 @@ def _parse_args() -> argparse.Namespace:
         "run-daily-midnight",
         help="Run Silver+Gold refresh, then predict latest and upsert predictions table",
     )
+    sub.add_parser(
+        "run-api-refresh",
+        help=(
+            "Run the server/API refresh flow: Silver+Gold refresh, weather refresh, "
+            "model bootstrap, then daily prediction"
+        ),
+    )
 
     return parser.parse_args()
 
@@ -231,12 +260,11 @@ def main() -> int:
         model_path = args.model_path or default_model_path
         model_metadata_path = args.model_metadata_path or default_model_metadata_path
         if args.model_path is None and args.model_metadata_path is None:
-            if _needs_classifier_retrain(model_path, model_metadata_path):
-                print(
-                    "Model artifacts missing; training once before first prediction "
-                    f"({model_path}, {model_metadata_path})."
-                )
-                train_ecoli_predictability(paths)
+            _ensure_classifier_artifacts(
+                paths,
+                model_path=model_path,
+                model_metadata_path=model_metadata_path,
+            )
 
         predict_latest_and_upsert(
             paths,
@@ -250,26 +278,32 @@ def main() -> int:
         return 0
 
     if args.cmd == "run-all":
-        build_silver_weather(paths)
-        build_messungen_komplett(paths)
-        build_data_full(paths)
-        build_masterdata_daily(paths)
-        build_daily_gold_dataset(paths)
+        _build_silver_gold(paths)
         return 0
 
     if args.cmd == "run-daily-midnight":
-        build_silver_weather(paths)
-        build_messungen_komplett(paths)
-        build_data_full(paths)
-        build_masterdata_daily(paths)
-        build_daily_gold_dataset(paths)
-        if _needs_classifier_retrain(default_model_path, default_model_metadata_path):
-            print(
-                "Model artifacts missing; training once before first prediction "
-                f"({default_model_path}, {default_model_metadata_path})."
-            )
-            train_ecoli_predictability(paths)
+        _build_silver_gold(paths)
+        _ensure_classifier_artifacts(
+            paths,
+            model_path=default_model_path,
+            model_metadata_path=default_model_metadata_path,
+        )
+        predict_latest_and_upsert(paths)
+        return 0
+
+    if args.cmd == "run-api-refresh":
+        _build_silver_gold(paths)
+        pull_stuttgart_weather_hourly(paths)
+        _ensure_classifier_artifacts(
+            paths,
+            model_path=default_model_path,
+            model_metadata_path=default_model_metadata_path,
+        )
         predict_latest_and_upsert(paths)
         return 0
 
     raise RuntimeError(f"Unknown command: {args.cmd}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

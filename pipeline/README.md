@@ -4,6 +4,8 @@ This is the **production Python subproject** for the NI_AI repository.
 
 Goal: keep Jupyter notebooks for exploration, but run/ship the data pipeline and model training as importable, testable `.py` code.
 
+For server setup, see `DEPLOYMENT.md` in the repository root.
+
 ## What this mirrors
 
 Notebook orchestration in the repo currently runs:
@@ -34,6 +36,7 @@ You can also run step-by-step:
 - `ni-ai-pipeline train-ecoli`
 - `ni-ai-pipeline predict-daily`
 - `ni-ai-pipeline run-daily-midnight`
+- `ni-ai-pipeline run-api-refresh`
 
 `train-ecoli` now persists a reusable model artifact by default:
 - `ecoli_model.pkl`
@@ -43,14 +46,18 @@ You can control this behavior:
 - `ni-ai-pipeline train-ecoli --no-save-model`
 - `ni-ai-pipeline train-ecoli --model-path <path> --model-metadata-path <path>`
 
-Daily prediction flow (for cron):
+API refresh flow:
 - `predict-daily` loads latest row from `gold_daily_features.csv`, runs the saved model, and writes/upserts `predictions.csv`.
 - `run-daily-midnight` refreshes Silver+Gold outputs and then runs `predict-daily`.
+- `run-api-refresh` refreshes Silver+Gold outputs, refreshes Stuttgart weather, bootstraps the model if needed, and then runs `predict-daily`. This is the preferred server command for API-facing deployments after Bronze crawlers have run.
 
-Hourly Stuttgart weather flow (for cron):
+Hourly full refresh flow (for cron):
+- `tools/cron/hourly_full_refresh.sh` runs the DWD crawler, the LUBW crawler, and then `ni-ai-pipeline run-api-refresh`.
+- Example cron entry (every hour): `0 * * * * /path/to/repo/tools/cron/hourly_full_refresh.sh >> /path/to/repo/logs/hourly_full_refresh.log 2>&1`
+
+Manual Stuttgart weather refresh:
 - `stuttgart-weather-hourly` fetches all hourly weather values for today from Open-Meteo, selects one requested hour (default: current local hour), and writes/upserts one row into `stuttgart_weather.csv`.
 - Example: `ni-ai-pipeline stuttgart-weather-hourly --hour 14`
-- Example cron entry (every hour): `0 * * * * /path/to/repo/tools/cron/stuttgart_weather_hourly.sh >> /path/to/repo/logs/stuttgart_weather_hourly.log 2>&1`
 
 API endpoint prerequisites:
 - `/get_current_weather` reads `GOLD_DATASETS_DIR/stuttgart_weather.csv` (or default `data/gold/datasets/stuttgart_weather.csv`).
@@ -64,10 +71,7 @@ API endpoint prerequisites:
 
 First-deploy bootstrap behavior:
 - `predict-daily` now auto-trains once when default model artifacts are missing, then writes `predictions.csv`.
-- `run-daily-midnight` also auto-trains once on missing model artifacts before prediction.
-
-Example cron entry (Linux):
-- `0 0 * * * /path/to/repo/tools/cron/daily_midnight_prediction.sh >> /path/to/repo/logs/daily_midnight_prediction.log 2>&1`
+- `run-api-refresh` also auto-trains once on missing model artifacts before prediction.
 
 ## Configuration
 

@@ -19,8 +19,4 @@ RUN if [ -n "$PIPELINE_EXTRAS" ]; then \
         pip install --no-cache-dir ./pipeline; \
     fi
 
-# Copy step scripts.
-COPY scripts/ ./scripts/
-COPY tools/ ./tools/
-
 # Default command is provided by docker-compose.yml
