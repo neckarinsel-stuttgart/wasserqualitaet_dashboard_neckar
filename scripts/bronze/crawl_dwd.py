@@ -103,7 +103,7 @@ logger.info(f'DWD recents dir: {RECENT_DIR}')
 
 
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import formatdate
 import json
 
@@ -403,6 +403,20 @@ def _collapse_duplicates_by_index(df: pd.DataFrame) -> pd.DataFrame:
     return collapsed
 
 
+def get_aggregation_end() -> pd.Timestamp:
+    """Return 23:00 tomorrow in local time for a complete next-day weather grid."""
+
+    tomorrow = datetime.now().astimezone().date() + timedelta(days=1)
+    return pd.Timestamp(tomorrow) + pd.Timedelta(hours=23)
+
+
+def _sort_by_available_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    sort_cols = [c for c in columns if c in df.columns]
+    if not sort_cols:
+        return df
+    return df.sort_values(sort_cols).reset_index(drop=True)
+
+
 # -----------------
 # Core update & aggregate
 # -----------------
@@ -512,7 +526,8 @@ def update_category(cat: str, short: str) -> None:
         if k in df_new.columns
     ]
     if keys:
-        df_new = df_new.drop_duplicates(subset=keys)
+        df_new = df_new.drop_duplicates(subset=keys, keep="last")
+        df_new = _sort_by_available_columns(df_new, keys)
         logger.info(f"De-duplicated using keys {keys}; rows now: {len(df_new):,}")
 
     # RAW file written into DATA_DIR (parent folder from .env)
@@ -527,7 +542,8 @@ def update_category(cat: str, short: str) -> None:
             if k in df_new.columns
         ]
         if keys:
-            df_new.drop_duplicates(subset=keys, inplace=True)
+            df_new.drop_duplicates(subset=keys, keep="last", inplace=True)
+            df_new = _sort_by_available_columns(df_new, keys)
     df_new.to_csv(raw_path, sep=";", index=False)
     logger.info(f"Wrote raw CSV: {raw_path} (rows={len(df_new):,})")
 
@@ -550,6 +566,7 @@ def update_category(cat: str, short: str) -> None:
         before = len(df_clean)
         df_clean.sort_values("DATUM", inplace=True)
         df_clean.drop_duplicates(subset="DATUM", keep="last", inplace=True)
+        df_clean.reset_index(drop=True, inplace=True)
         logger.info(
             "Clean de-dup by DATUM: before=%s after=%s removed=%s",
             before,
@@ -563,7 +580,8 @@ def update_category(cat: str, short: str) -> None:
 
 def aggregate_all() -> None:
     files = glob.glob(os.path.join(DATA_DIR, "clean_schnarrenberg_dwd_*.csv"))
-    date_range = pd.date_range("2023-01-01", "2025-12-31 23:00:00", freq="h")
+    aggregation_end = get_aggregation_end()
+    date_range = pd.date_range("2023-01-01", aggregation_end, freq="h")
     df_agg = pd.DataFrame(index=date_range)
     logger.info(f"Aggregate start. Clean files found: {len(files)}")
     logger.info(
@@ -720,7 +738,7 @@ def data_quality_monitoring() -> None:
 
     logger.info("DATE COVERAGE ANALYSIS")
     expected_start = pd.Timestamp("2023-01-01")
-    expected_end = pd.Timestamp("2025-12-31 23:00:00")
+    expected_end = get_aggregation_end()
     actual_start = df_agg.index.min()
     actual_end = df_agg.index.max()
     if pd.isna(actual_start) or pd.isna(actual_end):
