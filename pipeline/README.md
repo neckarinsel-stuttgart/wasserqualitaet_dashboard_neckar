@@ -56,7 +56,7 @@ Hourly full refresh flow (for cron):
 - Example cron entry (every hour): `0 * * * * /path/to/repo/tools/cron/hourly_full_refresh.sh >> /path/to/repo/logs/hourly_full_refresh.log 2>&1`
 
 Manual Stuttgart weather refresh:
-- `stuttgart-weather-hourly` fetches all hourly weather values for today from Open-Meteo, selects one requested hour (default: current local hour), and writes/upserts one row into `stuttgart_weather.csv`.
+- `stuttgart-weather-hourly` fetches all hourly weather values for the next local calendar day from Open-Meteo and writes/upserts all available hourly rows into `stuttgart_weather.csv`.
 - Example: `ni-ai-pipeline stuttgart-weather-hourly --hour 14`
 
 API endpoint prerequisites:

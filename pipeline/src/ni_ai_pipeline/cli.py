@@ -62,13 +62,13 @@ def _parse_args() -> argparse.Namespace:
 
     stuttgart_weather = sub.add_parser(
         "stuttgart-weather-hourly",
-        help="Pull Stuttgart hourly weather and upsert one selected hour into Gold stuttgart_weather.csv",
+        help="Pull Stuttgart hourly weather for next local calendar day and upsert rows into Gold stuttgart_weather.csv",
     )
     stuttgart_weather.add_argument(
         "--hour",
         type=int,
         default=None,
-        help="Requested local hour [0-23]. Defaults to current hour in timezone.",
+        help="Optional local hour [0-23] kept for backwards compatibility; next-day full-day pull is always used.",
     )
     stuttgart_weather.add_argument(
         "--timezone",

@@ -38,7 +38,7 @@ def _paths(tmp_path: Path) -> PathConfig:
     )
 
 
-def test_pull_stuttgart_weather_hourly_selects_requested_hour(monkeypatch, tmp_path: Path) -> None:
+def test_pull_stuttgart_weather_hourly_writes_full_next_day(monkeypatch, tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     payload = {
         "hourly": {
@@ -64,11 +64,13 @@ def test_pull_stuttgart_weather_hourly_selects_requested_hour(monkeypatch, tmp_p
     out_path = pull_stuttgart_weather_hourly(paths, requested_hour=14, timezone="Europe/Berlin")
 
     out = pd.read_csv(out_path)
-    assert len(out) == 1
-    assert str(out.loc[0, "weather_time_local"]).startswith("2026-06-20 14:00:00")
-    assert float(out.loc[0, "temperature_2m"]) == 21.0
-    assert float(out.loc[0, "wind_speed_10m"]) == 6.1
+    assert len(out) == 3
+    assert str(out.loc[0, "weather_time_local"]).startswith("2026-06-20 13:00:00")
+    assert str(out.loc[1, "weather_time_local"]).startswith("2026-06-20 14:00:00")
+    assert str(out.loc[2, "weather_time_local"]).startswith("2026-06-20 15:00:00")
+    assert float(out.loc[1, "temperature_2m"]) == 21.0
+    assert float(out.loc[1, "wind_speed_10m"]) == 6.1
 
     pull_stuttgart_weather_hourly(paths, requested_hour=14, timezone="Europe/Berlin")
     out2 = pd.read_csv(out_path)
-    assert len(out2) == 1
+    assert len(out2) == 3

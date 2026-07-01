@@ -84,41 +84,35 @@ def pull_stuttgart_weather_hourly(
     table_path: Path | None = None,
     upsert: bool = True,
 ) -> Path:
-    """Pull Stuttgart weather for current and next day at one selected hour.
+    """Pull Stuttgart weather for the entire next local calendar day.
 
-    Default behavior selects the current local hour in the given timezone.
+    All hourly rows for tomorrow (00:00-23:00 local time) are upserted.
     """
 
     _validate_requested_hour(requested_hour)
 
     table_path = table_path or (paths.gold_datasets_dir / "stuttgart_weather.csv")
-    target_local, selected_hour = _select_target_hour(requested_hour=requested_hour, timezone=timezone)
+    target_local, _ = _select_target_hour(requested_hour=requested_hour, timezone=timezone)
 
-    start_day = datetime.combine(target_local.date(), datetime.min.time(), tzinfo=target_local.tzinfo)
-    end_day = start_day.replace(day=start_day.day) + pd.Timedelta(days=1)
+    tomorrow_local = target_local + pd.Timedelta(days=1)
+    start_day = datetime.combine(tomorrow_local.date(), datetime.min.time(), tzinfo=target_local.tzinfo)
+    end_day = start_day
     hourly_df = _fetch_open_meteo_hourly_for_range(
         start_day_local=start_day,
         end_day_local=end_day,
         timezone=timezone,
     )
-    candidates = hourly_df.loc[
-        hourly_df["weather_time_local"].dt.hour == selected_hour
-    ].copy()
 
-    if candidates.empty:
+    if hourly_df.empty:
         raise RuntimeError(
-            f"No hourly weather rows found for selected hour {selected_hour:02d}"
+            f"No hourly weather rows found for next day {tomorrow_local.strftime('%Y-%m-%d')}"
         )
 
-    candidates = candidates.sort_values("weather_time_local")
-    candidates["weather_day"] = candidates["weather_time_local"].dt.normalize()
-    selected = candidates.groupby("weather_day", as_index=False).tail(1).copy()
-    selected = selected.sort_values("weather_time_local").tail(2)
-    selected = selected.drop(columns=["weather_day"], errors="ignore")
+    selected = hourly_df.sort_values("weather_time_local").copy()
 
     selected.insert(0, "site_id", paths.site_id or "stuttgart")
     selected["timezone"] = timezone
-    selected["selected_hour"] = selected_hour
+    selected["selected_hour"] = selected["weather_time_local"].dt.hour
     selected["source"] = "open-meteo"
     selected["created_at_utc"] = pd.Timestamp.now(tz="UTC").isoformat()
 
