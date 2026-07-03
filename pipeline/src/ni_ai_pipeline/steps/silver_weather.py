@@ -65,7 +65,9 @@ def _replace_negative_numeric_with_null(
 ) -> pd.DataFrame:
     """Replace negative numeric values with nulls while preserving non-numeric fields."""
 
-    out = df.copy()
+    # Work on object dtype to avoid StringDtype setitem errors on pandas>=2 when
+    # writing numeric/null values back into originally string-typed columns.
+    out = df.copy().astype("object")
     excluded = exclude_cols or set()
 
     # Iterate by position so duplicate column names are handled safely.
