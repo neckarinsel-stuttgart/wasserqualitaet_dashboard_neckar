@@ -34,7 +34,9 @@ def _impute_small_gaps_mean_of_neighbors(
         if not pd.api.types.is_numeric_dtype(s):
             continue
 
-        is_na = s.isna().to_numpy()
+        # Force a writable mask array; some pandas/numpy combinations return
+        # read-only views from to_numpy().
+        is_na = s.isna().to_numpy(copy=True)
         if not is_na.any():
             continue
 
