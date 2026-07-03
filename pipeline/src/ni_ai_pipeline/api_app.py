@@ -619,6 +619,16 @@ def _build_current_weather_payload(
 
     latest = valid_rows.sort_values(sort_cols).iloc[-1]
     payload = {str(k): _json_compatible_value(v) for k, v in latest.to_dict().items()}
+
+    # Keep the latest timestamp in the payload, but report the day's maximum temperature.
+    latest_day = pd.Timestamp(latest["weather_time_local"]).normalize()
+    day_rows = valid_rows.loc[
+        valid_rows["weather_time_local"].dt.normalize() == latest_day
+    ]
+    day_max_temp = pd.to_numeric(day_rows[temp_col], errors="coerce").max(skipna=True)
+    if pd.notna(day_max_temp):
+        payload[temp_col] = float(day_max_temp)
+
     payload["weather_time_local"] = pd.Timestamp(latest["weather_time_local"]).strftime(
         "%Y-%m-%d %H:%M:%S"
     )

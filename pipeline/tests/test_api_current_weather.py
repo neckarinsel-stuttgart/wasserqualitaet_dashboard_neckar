@@ -27,7 +27,9 @@ def _paths(tmp_path: Path) -> PathConfig:
     )
 
 
-def test_current_weather_payload_returns_latest_available_row(tmp_path: Path) -> None:
+def test_current_weather_payload_returns_latest_timestamp_with_daily_max_temperature(
+    tmp_path: Path,
+) -> None:
     paths = _paths(tmp_path)
     paths.gold_datasets_dir.mkdir(parents=True, exist_ok=True)
 
@@ -43,6 +45,13 @@ def test_current_weather_payload_returns_latest_available_row(tmp_path: Path) ->
             },
             {
                 "site_id": "default",
+                "weather_time_local": "2026-06-21 09:00:00",
+                "temperature_2m": 27.0,
+                "wind_speed_10m": 4.0,
+                "created_at_utc": "2026-06-21T07:00:00+00:00",
+            },
+            {
+                "site_id": "default",
                 "weather_time_local": "2026-06-21 12:00:00",
                 "temperature_2m": 22.0,
                 "wind_speed_10m": 8.0,
@@ -53,7 +62,7 @@ def test_current_weather_payload_returns_latest_available_row(tmp_path: Path) ->
 
     payload = _build_current_weather_payload(df, paths=paths, weather_path=weather_path)
     assert payload["weather_time_local"] == "2026-06-21 12:00:00"
-    assert payload["temperature_2m"] == 22.0
+    assert payload["temperature_2m"] == 27.0
     assert payload["wind_speed_10m"] == 8.0
 
 

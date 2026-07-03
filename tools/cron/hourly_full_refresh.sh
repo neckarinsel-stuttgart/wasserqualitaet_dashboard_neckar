@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Cron runs with a minimal PATH; include common locations for docker/docker-compose.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -9,14 +12,17 @@ export PYTHONPATH="$REPO_ROOT/pipeline/src${PYTHONPATH:+:$PYTHONPATH}"
 
 # Prefer containerized execution to avoid host Python dependency drift.
 if command -v docker >/dev/null 2>&1; then
+  COMPOSE_CMD=""
   if docker compose version >/dev/null 2>&1; then
-    docker compose run --rm --no-deps crawl_dwd
-    docker compose run --rm --no-deps crawl_lubw
-    exec docker compose run --rm --no-deps pipeline ni-ai-pipeline run-api-refresh
+    COMPOSE_CMD="docker compose"
   elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose run --rm --no-deps crawl_dwd
-    docker-compose run --rm --no-deps crawl_lubw
-    exec docker-compose run --rm --no-deps pipeline ni-ai-pipeline run-api-refresh
+    COMPOSE_CMD="docker-compose"
+  fi
+
+  if [[ -n "$COMPOSE_CMD" ]]; then
+    $COMPOSE_CMD run --rm --no-deps crawl_dwd
+    $COMPOSE_CMD run --rm --no-deps crawl_lubw
+    exec $COMPOSE_CMD run --rm --no-deps pipeline ni-ai-pipeline run-api-refresh
   fi
 fi
 
