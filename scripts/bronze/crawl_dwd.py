@@ -428,18 +428,20 @@ def _clip_negative_numeric_values(
     out = df.copy()
     excluded = exclude_cols or set()
 
-    for col in out.columns:
+    # Iterate by position so duplicate column names are handled safely.
+    for idx, col in enumerate(out.columns):
         if col in excluded:
             continue
 
-        numeric = pd.to_numeric(out[col], errors="coerce")
+        series = out.iloc[:, idx]
+        numeric = pd.to_numeric(series, errors="coerce")
         if numeric.notna().sum() == 0:
             continue
 
         negatives = int((numeric < 0).sum())
         if negatives:
             logger.info("Clipped %s negative values to 0 in column: %s", negatives, col)
-        out[col] = numeric.clip(lower=0)
+        out.iloc[:, idx] = numeric.clip(lower=0)
 
     return out
 
