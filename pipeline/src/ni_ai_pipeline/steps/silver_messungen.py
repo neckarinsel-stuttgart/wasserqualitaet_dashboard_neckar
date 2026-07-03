@@ -68,6 +68,28 @@ def _read_tidy_measurements(csv_path: pd.io.common.FilePath) -> pd.DataFrame:
     return out.dropna(subset=["datum"])
 
 
+def _replace_negative_numeric_with_null(
+    df: pd.DataFrame, exclude_cols: set[str] | None = None
+) -> pd.DataFrame:
+    """Replace negative numeric values with nulls while preserving non-numeric fields."""
+
+    out = df.copy()
+    excluded = exclude_cols or set()
+
+    for idx, col in enumerate(out.columns):
+        if col in excluded:
+            continue
+
+        series = out.iloc[:, idx]
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() == 0:
+            continue
+
+        out.iloc[:, idx] = numeric.mask(numeric < 0)
+
+    return out
+
+
 def build_messungen_komplett(paths: PathConfig) -> pd.DataFrame:
     """Create Silver measurement table from the 2024/2025 Bronze measurement inputs."""
 
@@ -87,6 +109,7 @@ def build_messungen_komplett(paths: PathConfig) -> pd.DataFrame:
     df_combined = pd.concat([df_2024, df_2025], ignore_index=True)
     df_combined = df_combined.dropna(subset=["datum"])
     df_combined = df_combined.sort_values("datum").reset_index(drop=True)
+    df_combined = _replace_negative_numeric_with_null(df_combined, exclude_cols={"datum"})
 
     output_path = paths.silver_messungen_dir / "messungen_komplett.csv"
     df_combined.to_csv(output_path, index=False)

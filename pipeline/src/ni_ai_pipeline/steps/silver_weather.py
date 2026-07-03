@@ -60,6 +60,29 @@ def _remove_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=cols_to_drop, errors="ignore")
 
 
+def _replace_negative_numeric_with_null(
+    df: pd.DataFrame, exclude_cols: set[str] | None = None
+) -> pd.DataFrame:
+    """Replace negative numeric values with nulls while preserving non-numeric fields."""
+
+    out = df.copy()
+    excluded = exclude_cols or set()
+
+    # Iterate by position so duplicate column names are handled safely.
+    for idx, col in enumerate(out.columns):
+        if col in excluded:
+            continue
+
+        series = out.iloc[:, idx]
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() == 0:
+            continue
+
+        out.iloc[:, idx] = numeric.mask(numeric < 0)
+
+    return out
+
+
 def _create_cleans(paths: PathConfig) -> None:
     paths.silver_weather_dir.mkdir(parents=True, exist_ok=True)
 
@@ -100,6 +123,7 @@ def _create_cleans(paths: PathConfig) -> None:
 
         df_fixed = _fix_dates(df)
         df_fixed = _rename_columns(df_fixed)
+        df_fixed = _replace_negative_numeric_with_null(df_fixed)
 
         out_file = paths.silver_weather_dir / f"clean_{Path(file).name}"
         df_fixed.to_csv(out_file)
@@ -143,6 +167,8 @@ def _create_master(paths: PathConfig) -> pd.DataFrame:
         if overlap:
             df_new = df_new.drop(columns=overlap, errors="ignore")
         merged = merged.join(df_new, how="left")
+
+    merged = _replace_negative_numeric_with_null(merged)
 
     return merged
 
