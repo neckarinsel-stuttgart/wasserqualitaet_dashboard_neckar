@@ -15,7 +15,7 @@ def build_last_30d_plot_payload(
     site_id: str | None,
     date_col: str = "date",
     end_date: str | pd.Timestamp | date | None = None,
-    days: int = 30,
+    days: int | None = 30,
     strict_columns: bool = False,
 ) -> dict[str, Any]:
     """Build the same JSON payload shape as `scripts/gold/june_gold_feature_graphs.ipynb`,
@@ -37,8 +37,8 @@ def build_last_30d_plot_payload(
     - `year`/`month` are derived from the chosen `end_date` (usually the most recent date in the data).
     """
 
-    if days <= 0:
-        raise ValueError(f"days must be positive, got {days}")
+    if days is not None and days <= 0:
+        raise ValueError(f"days must be positive when provided, got {days}")
 
     if date_col not in df.columns:
         raise KeyError(f"Missing date column '{date_col}'. Available: {list(df.columns)}")
@@ -62,9 +62,11 @@ def build_last_30d_plot_payload(
         raise ValueError("Could not determine end_date (no valid dates found).")
 
     end_ts = pd.Timestamp(end_ts).tz_localize(None).normalize()
-    start_ts = (end_ts - pd.Timedelta(days=days - 1)).normalize()
-
-    mask = (dt >= start_ts) & (dt <= end_ts)
+    if days is None:
+        mask = dt <= end_ts
+    else:
+        start_ts = (end_ts - pd.Timedelta(days=days - 1)).normalize()
+        mask = (dt >= start_ts) & (dt <= end_ts)
     last = df.loc[mask, [date_col, *effective_plot_cols]].copy()
     last[date_col] = pd.to_datetime(last[date_col], errors="coerce").dt.tz_localize(None).dt.normalize()
     last = last.sort_values(date_col)
@@ -109,7 +111,7 @@ def build_last_30d_plot_payload_json(
     site_id: str | None,
     date_col: str = "date",
     end_date: str | pd.Timestamp | date | None = None,
-    days: int = 30,
+    days: int | None = 30,
     strict_columns: bool = False,
     indent: int = 2,
 ) -> str:

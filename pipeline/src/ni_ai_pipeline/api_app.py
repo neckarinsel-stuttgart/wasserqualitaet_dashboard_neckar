@@ -647,7 +647,7 @@ def create_app() -> FastAPI:
 
     @app.get("/plot-data")
     def get_plot_data_last_30d() -> Response:
-        """Return last-30-days plot payload JSON (same format as notebook export).
+        """Return full-history plot payload JSON (same format as notebook export).
 
         Returned as an application/json download (no auth).
         """
@@ -676,13 +676,13 @@ def create_app() -> FastAPI:
             plot_cols=plot_cols,
             site_id=paths.site_id,
             date_col="date",
-            days=30,
+            days=None,
             strict_columns=False,
             indent=2,
         )
 
         headers = {
-            "Content-Disposition": 'attachment; filename="last_30d_plot_data.json"'
+            "Content-Disposition": 'attachment; filename="plot_data.json"'
         }
         return Response(content=json_text, media_type="application/json", headers=headers)
 
