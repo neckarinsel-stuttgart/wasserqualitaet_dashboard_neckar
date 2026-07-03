@@ -417,6 +417,33 @@ def _sort_by_available_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataF
     return df.sort_values(sort_cols).reset_index(drop=True)
 
 
+def _clip_negative_numeric_values(
+    df: pd.DataFrame, exclude_cols: set[str] | None = None
+) -> pd.DataFrame:
+    """Cap all numeric values at a minimum of 0.
+
+    This guards against known negative sensor outliers in bronze exports.
+    """
+
+    out = df.copy()
+    excluded = exclude_cols or set()
+
+    for col in out.columns:
+        if col in excluded:
+            continue
+
+        numeric = pd.to_numeric(out[col], errors="coerce")
+        if numeric.notna().sum() == 0:
+            continue
+
+        negatives = int((numeric < 0).sum())
+        if negatives:
+            logger.info("Clipped %s negative values to 0 in column: %s", negatives, col)
+        out[col] = numeric.clip(lower=0)
+
+    return out
+
+
 # -----------------
 # Core update & aggregate
 # -----------------
@@ -574,6 +601,9 @@ def update_category(cat: str, short: str) -> None:
             before - len(df_clean),
         )
 
+    # Cap known negative measurement outliers before writing bronze clean files.
+    df_clean = _clip_negative_numeric_values(df_clean, exclude_cols={"DATUM"})
+
     df_clean.to_csv(clean_path, index=False)
     logger.info(f"Wrote clean CSV: {clean_path} (rows={len(df_clean):,})")
 
@@ -622,6 +652,9 @@ def aggregate_all() -> None:
 
     # Keep exactly one row per hour in the target range
     df_agg = df_agg[~df_agg.index.duplicated(keep="first")]
+
+    # Apply the same floor in the final bronze aggregate for consistency.
+    df_agg = _clip_negative_numeric_values(df_agg)
 
     out_path = os.path.join(DATA_DIR, "clean_wetter_komplett.csv")
     df_agg.to_csv(out_path)
