@@ -140,7 +140,7 @@ def predict_latest_and_upsert(
 
     raw_prediction = predictions[0]
     if target_name == "ecoli":
-        ecoli_threshold = float(metadata.get("ecoli_threshold", 1000.0))
+        ecoli_threshold = float(metadata.get("ecoli_threshold", 500.0))
         raw_numeric = pd.to_numeric(pd.Series([raw_prediction]), errors="coerce").iloc[0]
         if pd.isna(raw_numeric):
             raise RuntimeError(f"Could not convert ecoli prediction to numeric: {raw_prediction!r}")

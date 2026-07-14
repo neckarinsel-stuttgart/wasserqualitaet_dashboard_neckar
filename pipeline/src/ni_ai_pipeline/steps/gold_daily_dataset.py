@@ -208,7 +208,7 @@ def build_daily_gold_dataset(
     labels.insert(0, "site_id", paths.site_id)
     if "ecoli" in labels.columns:
         ecoli_numeric = pd.to_numeric(labels["ecoli"], errors="coerce")
-        labels["pos_neg"] = np.where(ecoli_numeric <= 1000, 1, 0)
+        labels["pos_neg"] = np.where(ecoli_numeric <= 500, 1, 0)
         labels.loc[ecoli_numeric.isna(), "pos_neg"] = np.nan
 
     features_out = features.reset_index().rename(columns={"index": "date", "timestamp": "date"})
