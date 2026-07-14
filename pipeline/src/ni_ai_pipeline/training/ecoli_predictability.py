@@ -183,6 +183,44 @@ def _positive_scores(model: Any, x: pd.DataFrame) -> np.ndarray | None:
     return np.asarray(proba[:, positive_idx], dtype=float)
 
 
+def _dynamic_class_weight_from_messungen(paths: PathConfig, *, ecoli_threshold: float) -> dict[int, float]:
+    labels_path = paths.silver_messungen_dir / "messungen_komplett.csv"
+    if not labels_path.exists():
+        raise FileNotFoundError(
+            f"Dynamic class weight requested, but missing labels file: {labels_path}"
+        )
+
+    df = pd.read_csv(labels_path)
+    cols = {str(c).strip().lower(): c for c in df.columns}
+    if "ecoli" not in cols:
+        raise KeyError(
+            f"Dynamic class weight requested, but column 'ecoli' not found in {labels_path}. "
+            f"Columns: {list(df.columns)}"
+        )
+
+    ecoli = pd.to_numeric(df[cols["ecoli"]], errors="coerce").dropna()
+    if ecoli.empty:
+        raise RuntimeError(
+            f"Dynamic class weight requested, but no numeric ecoli values found in {labels_path}."
+        )
+
+    pos_count = int((ecoli <= float(ecoli_threshold)).sum())
+    neg_count = int((ecoli > float(ecoli_threshold)).sum())
+    n_total = pos_count + neg_count
+
+    if pos_count == 0 or neg_count == 0:
+        raise RuntimeError(
+            "Dynamic class weight requested, but one class is empty at threshold "
+            f"{ecoli_threshold}: pos={pos_count}, neg={neg_count}."
+        )
+
+    # sklearn-style balanced weighting: n_samples / (n_classes * n_samples_class)
+    return {
+        0: float(n_total / (2.0 * neg_count)),
+        1: float(n_total / (2.0 * pos_count)),
+    }
+
+
 def train_ecoli_predictability(
     paths: PathConfig,
     *,
@@ -200,6 +238,10 @@ def train_ecoli_predictability(
     mlflow_run_name: str | None = None,
     mlflow_tracking_uri: str | None = None,
     mlflow_log_model: bool = True,
+    class_weight_negative: float = 0.8,
+    class_weight_positive: float = 0.2,
+    auto_class_weight: bool = False,
+    class_weight_threshold: float = 500.0,
 ) -> None:
     """Evaluate simple models for predicting ecoli from daily Gold features.
 
@@ -217,7 +259,7 @@ def train_ecoli_predictability(
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.impute import SimpleImputer
         from sklearn.inspection import permutation_importance
-        from sklearn.linear_model import LogisticRegression
+        from sklearn.linear_model import LogisticRegression, RidgeClassifier
         from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
         from sklearn.model_selection import TimeSeriesSplit
         from sklearn.pipeline import Pipeline
@@ -282,27 +324,58 @@ def train_ecoli_predictability(
     x_train, x_test = x.iloc[:train_n], x.iloc[train_n:]
     y_train, y_test = y.iloc[:train_n], y.iloc[train_n:]
 
+    if auto_class_weight:
+        class_weight = _dynamic_class_weight_from_messungen(
+            paths,
+            ecoli_threshold=class_weight_threshold,
+        )
+        class_weight_negative = float(class_weight[0])
+        class_weight_positive = float(class_weight[1])
+    else:
+        if class_weight_negative <= 0 or class_weight_positive <= 0:
+            raise ValueError(
+                "class_weight_negative and class_weight_positive must be > 0 "
+                f"(got {class_weight_negative}, {class_weight_positive})."
+            )
+
+        class_weight = {0: float(class_weight_negative), 1: float(class_weight_positive)}
+
     pre = Pipeline(steps=[("impute", SimpleImputer(strategy="median"))])
 
     models: list[tuple[str, Any]] = [
-        ("dummy_most_frequent", DummyClassifier(strategy="most_frequent")),
         (
             "logistic_l2",
             LogisticRegression(
                 C=1.0,
-                class_weight="balanced",
+                class_weight=class_weight,
                 solver="liblinear",
                 max_iter=2000,
                 random_state=0,
             ),
         ),
         (
-            "random_forest_balanced",
+            "ridge_classifier_weighted_a1",
+            RidgeClassifier(
+                alpha=1.0,
+                class_weight=class_weight,
+                random_state=0,
+            ),
+        ),
+        (
+            "ridge_classifier_weighted_a5",
+            RidgeClassifier(
+                alpha=5.0,
+                class_weight=class_weight,
+                random_state=0,
+            ),
+        ),
+        (
+            "random_forest_weighted",
             RandomForestClassifier(
                 n_estimators=300,
                 max_depth=None,
                 min_samples_leaf=2,
-                class_weight="balanced_subsample",
+                class_weight=class_weight,
                 random_state=0,
                 n_jobs=-1,
             ),
@@ -436,6 +509,13 @@ def train_ecoli_predictability(
         f.write(f"Train rows: {len(y_train)}\n")
         f.write(f"Holdout rows (last): {len(y_test)}\n")
         f.write(f"TimeSeriesSplit folds: {n_splits}\n\n")
+        f.write(f"Class weight mode: {'auto_from_messungen' if auto_class_weight else 'manual'}\n")
+        if auto_class_weight:
+            f.write(f"Class weight ecoli threshold: {class_weight_threshold:.3f}\n")
+        f.write(
+            "Class weights "
+            f"(label=0, label=1): ({class_weight_negative:.3f}, {class_weight_positive:.3f})\n\n"
+        )
 
         f.write("Target summary (train):\n")
         f.write(f"  positive_rate={float(np.mean(y_train.astype(bool))):.3f}\n\n")
@@ -505,6 +585,10 @@ def train_ecoli_predictability(
                     "test_fraction": test_fraction,
                     "log_target": log_target,
                     "export_ecoli_only": export_ecoli_only,
+                    "class_weight_mode": "auto_from_messungen" if auto_class_weight else "manual",
+                    "class_weight_threshold": float(class_weight_threshold),
+                    "class_weight_negative": float(class_weight_negative),
+                    "class_weight_positive": float(class_weight_positive),
                     "n_rows": int(len(y)),
                     "n_features": int(x.shape[1]),
                     "tscv_splits": int(n_splits),

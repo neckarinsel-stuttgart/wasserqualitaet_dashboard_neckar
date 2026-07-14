@@ -152,6 +152,32 @@ def _parse_args() -> argparse.Namespace:
     )
     train.add_argument("--target", type=str, default="pos_neg")
     train.add_argument("--test-fraction", type=float, default=0.2)
+    train.add_argument(
+        "--class-weight-negative",
+        type=float,
+        default=0.8,
+        help="Class weight for label 0 (default: 0.8)",
+    )
+    train.add_argument(
+        "--class-weight-positive",
+        type=float,
+        default=0.2,
+        help="Class weight for label 1 (default: 0.2)",
+    )
+    train.add_argument(
+        "--auto-class-weight",
+        action="store_true",
+        help=(
+            "Derive class weights dynamically from SILVER_MESSUNGEN_DIR/messungen_komplett.csv "
+            "using ecoli threshold"
+        ),
+    )
+    train.add_argument(
+        "--class-weight-threshold",
+        type=float,
+        default=500.0,
+        help="Ecoli threshold used for --auto-class-weight (default: 500)",
+    )
     train.add_argument("--log-target", action="store_true")
     train.add_argument("--export-ecoli-only", action="store_true")
     train.add_argument(
@@ -291,6 +317,10 @@ def main() -> int:
             out_dir=args.out_dir,
             target=args.target,
             test_fraction=args.test_fraction,
+            class_weight_negative=args.class_weight_negative,
+            class_weight_positive=args.class_weight_positive,
+            auto_class_weight=args.auto_class_weight,
+            class_weight_threshold=args.class_weight_threshold,
             log_target=args.log_target,
             export_ecoli_only=args.export_ecoli_only,
             save_model=(not args.no_save_model),
