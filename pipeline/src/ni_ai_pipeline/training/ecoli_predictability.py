@@ -93,6 +93,8 @@ def _build_model_metadata(
     dropped_non_feature_columns: list[str],
     best_model_name: str,
     data_path: Path,
+    training_row_count: int,
+    training_max_date: str | None,
 ) -> dict[str, Any]:
     return {
         "target": target,
@@ -101,6 +103,8 @@ def _build_model_metadata(
         "dropped_non_feature_columns": dropped_non_feature_columns,
         "best_model": best_model_name,
         "training_data_path": str(data_path),
+        "training_row_count": int(training_row_count),
+        "training_max_date": training_max_date,
     }
 
 
@@ -248,6 +252,13 @@ def train_ecoli_predictability(
     valid = y.notna()
     x = x.loc[valid]
     y = y.loc[valid]
+
+    training_max_date: str | None = None
+    if "date" in df.columns:
+        training_dates = pd.to_datetime(df.loc[valid, "date"], errors="coerce")
+        training_dates = training_dates.dropna()
+        if not training_dates.empty:
+            training_max_date = pd.Timestamp(training_dates.max()).strftime("%Y-%m-%d")
 
     y = y.astype(bool)
 
@@ -418,6 +429,8 @@ def train_ecoli_predictability(
             dropped_non_feature_columns=base_drop + [target],
             best_model_name=best.name,
             data_path=data_path,
+            training_row_count=len(y),
+            training_max_date=training_max_date,
         )
         model_metadata["task"] = "binary_classification"
         model_metadata_path.write_text(

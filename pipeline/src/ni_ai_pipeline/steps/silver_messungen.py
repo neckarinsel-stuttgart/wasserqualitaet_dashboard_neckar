@@ -93,22 +93,20 @@ def _replace_negative_numeric_with_null(
 
 
 def build_messungen_komplett(paths: PathConfig) -> pd.DataFrame:
-    """Create Silver measurement table from the 2024/2025 Bronze measurement inputs."""
+    """Create Silver measurement table from all Bronze yearly measurement inputs."""
 
     paths.silver_messungen_dir.mkdir(parents=True, exist_ok=True)
 
-    required = ["messungen_2024.csv", "messungen_2025.csv"]
-    missing = [f for f in required if not (paths.bronze_messungen_dir / f).exists()]
-    if missing:
+    input_files = sorted(paths.bronze_messungen_dir.glob("messungen_[0-9][0-9][0-9][0-9].csv"))
+    if not input_files:
         raise FileNotFoundError(
-            f"Missing {missing} in {paths.bronze_messungen_dir}. "
+            f"No yearly measurement files found in {paths.bronze_messungen_dir}. "
+            "Expected files like messungen_2024.csv, messungen_2025.csv, messungen_2026.csv. "
             "Put files under data/bronze/messungen (or set BRONZE_MESSUNGEN_DIR/DATA_BRONZE)."
         )
 
-    df_2024 = _read_tidy_measurements(paths.bronze_messungen_dir / "messungen_2024.csv")
-    df_2025 = _read_tidy_measurements(paths.bronze_messungen_dir / "messungen_2025.csv")
-
-    df_combined = pd.concat([df_2024, df_2025], ignore_index=True)
+    frames = [_read_tidy_measurements(csv_path) for csv_path in input_files]
+    df_combined = pd.concat(frames, ignore_index=True)
     df_combined = df_combined.dropna(subset=["datum"])
     df_combined = df_combined.sort_values("datum").reset_index(drop=True)
     df_combined = _replace_negative_numeric_with_null(df_combined, exclude_cols={"datum"})

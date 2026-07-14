@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import pandas as pd
+
 from ni_ai_pipeline.paths import PathConfig, get_paths
 from ni_ai_pipeline.steps.gold_daily_dataset import build_daily_gold_dataset
 from ni_ai_pipeline.steps.gold_data_full import build_data_full
@@ -27,6 +29,34 @@ def _needs_classifier_retrain(model_path: Path, model_metadata_path: Path) -> bo
     return str(metadata.get("task")) != "binary_classification"
 
 
+def _dataset_training_fingerprint(paths: PathConfig) -> tuple[int, str | None]:
+    dataset_path = paths.gold_datasets_dir / "gold_daily_dataset.csv"
+    if not dataset_path.exists():
+        return 0, None
+
+    df = pd.read_csv(dataset_path, usecols=lambda c: str(c).lower() in {"date", "pos_neg"})
+    lower_cols = {str(c).lower(): c for c in df.columns}
+
+    if "pos_neg" not in lower_cols:
+        return 0, None
+
+    pos_neg_col = lower_cols["pos_neg"]
+    valid = pd.to_numeric(df[pos_neg_col], errors="coerce").notna()
+    row_count = int(valid.sum())
+    if row_count == 0:
+        return 0, None
+
+    if "date" not in lower_cols:
+        return row_count, None
+
+    date_col = lower_cols["date"]
+    max_date = pd.to_datetime(df.loc[valid, date_col], errors="coerce").dropna().max()
+    if pd.isna(max_date):
+        return row_count, None
+
+    return row_count, pd.Timestamp(max_date).strftime("%Y-%m-%d")
+
+
 def _build_silver_gold(paths: PathConfig) -> None:
     build_silver_weather(paths)
     build_messungen_komplett(paths)
@@ -41,9 +71,28 @@ def _ensure_classifier_artifacts(
     model_path: Path,
     model_metadata_path: Path,
 ) -> None:
-    if _needs_classifier_retrain(model_path, model_metadata_path):
+    retrain_needed = _needs_classifier_retrain(model_path, model_metadata_path)
+
+    if not retrain_needed:
+        try:
+            metadata = load_model_metadata(model_metadata_path)
+            trained_rows = int(metadata.get("training_row_count", 0) or 0)
+            trained_max_date = metadata.get("training_max_date")
+
+            current_rows, current_max_date = _dataset_training_fingerprint(paths)
+            if current_rows > trained_rows:
+                retrain_needed = True
+            elif (
+                current_max_date is not None
+                and (trained_max_date is None or str(current_max_date) > str(trained_max_date))
+            ):
+                retrain_needed = True
+        except Exception:
+            retrain_needed = True
+
+    if retrain_needed:
         print(
-            "Model artifacts missing; training once before first prediction "
+            "Model artifacts missing or stale for current data; training before prediction "
             f"({model_path}, {model_metadata_path})."
         )
         train_ecoli_predictability(paths)
