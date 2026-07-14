@@ -79,9 +79,13 @@ class ModelResult:
     name: str
     cv_accuracy: float
     cv_f1: float
+    cv_macro_f1: float
+    cv_balanced_accuracy: float
     cv_roc_auc: float
     holdout_accuracy: float
     holdout_f1: float
+    holdout_macro_f1: float
+    holdout_balanced_accuracy: float
     holdout_roc_auc: float
 
 
@@ -210,10 +214,11 @@ def train_ecoli_predictability(
     # Local imports so the pipeline can be used without sklearn.
     try:
         from sklearn.dummy import DummyClassifier
+        from sklearn.ensemble import RandomForestClassifier
         from sklearn.impute import SimpleImputer
         from sklearn.inspection import permutation_importance
         from sklearn.linear_model import LogisticRegression
-        from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+        from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, roc_auc_score
         from sklearn.model_selection import TimeSeriesSplit
         from sklearn.pipeline import Pipeline
     except Exception as exc:  # pragma: no cover
@@ -291,6 +296,17 @@ def train_ecoli_predictability(
                 random_state=0,
             ),
         ),
+        (
+            "random_forest_balanced",
+            RandomForestClassifier(
+                n_estimators=300,
+                max_depth=None,
+                min_samples_leaf=2,
+                class_weight="balanced_subsample",
+                random_state=0,
+                n_jobs=-1,
+            ),
+        ),
     ]
 
     n_splits = min(5, max(2, train_n // 8))
@@ -301,6 +317,8 @@ def train_ecoli_predictability(
     for name, reg in models:
         cv_accuracy_scores: list[float] = []
         cv_f1_scores: list[float] = []
+        cv_macro_f1_scores: list[float] = []
+        cv_balanced_accuracy_scores: list[float] = []
         cv_roc_auc_scores: list[float] = []
 
         for tr_idx, va_idx in tscv.split(x_train):
@@ -316,6 +334,8 @@ def train_ecoli_predictability(
 
             cv_accuracy_scores.append(accuracy_score(yv, pred))
             cv_f1_scores.append(f1_score(yv, pred, zero_division=0))
+            cv_macro_f1_scores.append(f1_score(yv, pred, average="macro", zero_division=0))
+            cv_balanced_accuracy_scores.append(balanced_accuracy_score(yv, pred))
 
             scores = _positive_scores(fold_pipe, xv)
             if scores is not None and len(np.unique(yv)) > 1:
@@ -333,9 +353,17 @@ def train_ecoli_predictability(
                 name=name,
                 cv_accuracy=float(np.mean(cv_accuracy_scores)),
                 cv_f1=float(np.mean(cv_f1_scores)),
+                cv_macro_f1=float(np.mean(cv_macro_f1_scores)),
+                cv_balanced_accuracy=float(np.mean(cv_balanced_accuracy_scores)),
                 cv_roc_auc=float(np.mean(cv_roc_auc_scores)) if cv_roc_auc_scores else float("nan"),
                 holdout_accuracy=accuracy_score(y_test.astype(bool).to_numpy(), holdout_pred),
                 holdout_f1=f1_score(y_test.astype(bool).to_numpy(), holdout_pred, zero_division=0),
+                holdout_macro_f1=f1_score(
+                    y_test.astype(bool).to_numpy(), holdout_pred, average="macro", zero_division=0
+                ),
+                holdout_balanced_accuracy=balanced_accuracy_score(
+                    y_test.astype(bool).to_numpy(), holdout_pred
+                ),
                 holdout_roc_auc=(
                     roc_auc_score(y_test.astype(bool).to_numpy(), holdout_scores)
                     if holdout_scores is not None and len(np.unique(y_test.to_numpy())) > 1
@@ -344,7 +372,15 @@ def train_ecoli_predictability(
             )
         )
 
-    best = max(results, key=lambda r: (r.holdout_f1, r.holdout_accuracy))
+    best = max(
+        results,
+        key=lambda r: (
+            r.holdout_macro_f1,
+            r.holdout_balanced_accuracy,
+            r.holdout_f1,
+            r.holdout_accuracy,
+        ),
+    )
 
     best_reg = dict(models)[best.name]
     best_pipe = Pipeline(steps=[("pre", pre), ("model", best_reg)])
@@ -375,7 +411,8 @@ def train_ecoli_predictability(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     results_df = pd.DataFrame([r.__dict__ for r in results]).sort_values(
-        ["holdout_f1", "holdout_accuracy"], ascending=[False, False]
+        ["holdout_macro_f1", "holdout_balanced_accuracy", "holdout_f1", "holdout_accuracy"],
+        ascending=[False, False, False, False],
     )
     results_path = out_dir / "ecoli_predictability_results.csv"
     results_df.to_csv(results_path, index=False)
@@ -403,7 +440,7 @@ def train_ecoli_predictability(
         f.write("Target summary (train):\n")
         f.write(f"  positive_rate={float(np.mean(y_train.astype(bool))):.3f}\n\n")
 
-        f.write("Model comparison (sorted by holdout F1, then accuracy):\n")
+        f.write("Model comparison (sorted by holdout macro-F1, balanced accuracy, F1, accuracy):\n")
         f.write(results_df.to_string(index=False))
         f.write("\n\n")
 
@@ -481,9 +518,13 @@ def train_ecoli_predictability(
                     {
                         prefix + "cv_accuracy": r.cv_accuracy,
                         prefix + "cv_f1": r.cv_f1,
+                        prefix + "cv_macro_f1": r.cv_macro_f1,
+                        prefix + "cv_balanced_accuracy": r.cv_balanced_accuracy,
                         prefix + "cv_roc_auc": r.cv_roc_auc,
                         prefix + "holdout_accuracy": r.holdout_accuracy,
                         prefix + "holdout_f1": r.holdout_f1,
+                        prefix + "holdout_macro_f1": r.holdout_macro_f1,
+                        prefix + "holdout_balanced_accuracy": r.holdout_balanced_accuracy,
                         prefix + "holdout_roc_auc": r.holdout_roc_auc,
                     }
                 )
