@@ -93,6 +93,7 @@ CATEGORIES = {
 # 4928 = Stuttgart (Schnarrenberg); 4931 is Echterdingen airport
 STATION_ID = int(os.getenv("DWD_STATION_ID") or "4928")
 HISTORY_START = "2023010100"
+SIGNED_PREFIXES = ("TT_", "TD_", "TF_", "V_TE")
 
 # recents/ is created inside the bronze DWD folder
 RECENT_DIR = os.path.join(DATA_DIR, "recents")
@@ -421,7 +422,7 @@ def _sort_by_available_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataF
 def _clip_negative_numeric_values(
     df: pd.DataFrame, exclude_cols: set[str] | None = None
 ) -> pd.DataFrame:
-    """Cap all numeric values at a minimum of 0.
+    """Set DWD missing markers (-999) to NaN and cap negatives at 0 (except temperatures).
 
     This guards against known negative sensor outliers in bronze exports.
     """
@@ -439,10 +440,13 @@ def _clip_negative_numeric_values(
         if numeric.notna().sum() == 0:
             continue
 
-        negatives = int((numeric < 0).sum())
-        if negatives:
-            logger.info("Clipped %s negative values to 0 in column: %s", negatives, col)
-        out.iloc[:, idx] = numeric.clip(lower=0)
+        numeric = numeric.mask(numeric <= -999)
+        if not str(col).upper().startswith(SIGNED_PREFIXES):
+            negatives = int((numeric < 0).sum())
+            if negatives:
+                logger.info("Clipped %s negative values to 0 in column: %s", negatives, col)
+            numeric = numeric.clip(lower=0)
+        out.iloc[:, idx] = numeric
 
     return out
 

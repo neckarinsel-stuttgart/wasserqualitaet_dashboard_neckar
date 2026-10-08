@@ -287,6 +287,7 @@ def train_ecoli_predictability(
         df.to_csv(ecoli_only_path, index=False)
 
     base_drop = ["site_id", "date", "n_samples"]
+    base_drop += [c for c in ("ecoli", "pos_neg") if c != target and c in df.columns]
 
     x, y = select_features(df, target_col=target, drop_cols=base_drop)
 

@@ -60,10 +60,13 @@ def _remove_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=cols_to_drop, errors="ignore")
 
 
+SIGNED_PREFIXES = ("TT_", "TD_", "TF_", "V_TE")
+
+
 def _replace_negative_numeric_with_null(
     df: pd.DataFrame, exclude_cols: set[str] | None = None
 ) -> pd.DataFrame:
-    """Replace negative numeric values with nulls while preserving non-numeric fields."""
+    """Replace negative numeric values with nulls (temperatures: only the -999 marker)."""
 
     # Work on object dtype to avoid StringDtype setitem errors on pandas>=2 when
     # writing numeric/null values back into originally string-typed columns.
@@ -80,7 +83,10 @@ def _replace_negative_numeric_with_null(
         if numeric.notna().sum() == 0:
             continue
 
-        out.iloc[:, idx] = numeric.mask(numeric < 0)
+        if str(col).upper().startswith(SIGNED_PREFIXES):
+            out.iloc[:, idx] = numeric.mask(numeric <= -999)
+        else:
+            out.iloc[:, idx] = numeric.mask(numeric < 0)
 
     return out
 
