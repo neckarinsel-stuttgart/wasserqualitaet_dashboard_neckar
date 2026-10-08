@@ -13,6 +13,7 @@ from ni_ai_pipeline.steps.gold_stuttgart_weather import pull_stuttgart_weather_h
 from ni_ai_pipeline.steps.silver_messungen import build_messungen_komplett
 from ni_ai_pipeline.steps.silver_weather import build_silver_weather
 from ni_ai_pipeline.training.daily_prediction import predict_latest_and_upsert
+from ni_ai_pipeline.training.ecoli_predictability import TRAINING_START_DATE
 from ni_ai_pipeline.training.ecoli_predictability import load_model_metadata
 from ni_ai_pipeline.training.ecoli_predictability import train_ecoli_predictability
 
@@ -42,6 +43,9 @@ def _dataset_training_fingerprint(paths: PathConfig) -> tuple[int, str | None]:
 
     pos_neg_col = lower_cols["pos_neg"]
     valid = pd.to_numeric(df[pos_neg_col], errors="coerce").notna()
+    if TRAINING_START_DATE and "date" in lower_cols:
+        dates = pd.to_datetime(df[lower_cols["date"]], errors="coerce")
+        valid &= dates >= pd.Timestamp(TRAINING_START_DATE)
     row_count = int(valid.sum())
     if row_count == 0:
         return 0, None

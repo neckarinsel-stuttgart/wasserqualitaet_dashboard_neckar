@@ -5,12 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import json
+import os
 import pickle
 
 import numpy as np
 import pandas as pd
 
 from ni_ai_pipeline.paths import PathConfig
+
+# 2024 samples were analysed by a different lab; train on homogeneous data only
+TRAINING_START_DATE = os.getenv("TRAINING_START_DATE", "2025-01-01")
 
 
 def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -242,6 +246,7 @@ def train_ecoli_predictability(
     class_weight_positive: float = 0.2,
     auto_class_weight: bool = False,
     class_weight_threshold: float = 500.0,
+    training_start_date: str | None = TRAINING_START_DATE,
 ) -> None:
     """Evaluate simple models for predicting ecoli from daily Gold features.
 
@@ -277,6 +282,8 @@ def train_ecoli_predictability(
         raise FileNotFoundError(f"Dataset not found: {data_path}")
 
     df = pd.read_csv(data_path)
+    if training_start_date:
+        df = df[pd.to_datetime(df["date"], errors="coerce") >= pd.Timestamp(training_start_date)]
     df = add_time_features(df, date_col="date")
 
     df, dropped_entro_cols = drop_entro_everywhere(df)
@@ -502,6 +509,7 @@ def train_ecoli_predictability(
         f.write(f"Dataset: {data_path}\n")
         f.write(f"Rows (with {target}): {len(y)}\n")
         f.write(f"Features used: {x.shape[1]}\n")
+        f.write(f"Training start date: {training_start_date}\n")
         f.write(f"Dropped entro columns: {dropped_entro_cols}\n")
         f.write(f"Dropped non-feature cols: {base_drop + [target]}\n")
         f.write(f"Log target: {log_target}\n")
