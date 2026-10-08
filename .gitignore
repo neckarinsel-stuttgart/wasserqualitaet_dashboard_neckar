@@ -32,6 +32,7 @@ data/gold/
 
 # Bronze data: commit CSVs only (no caches/logs)
 data/bronze/dwd/recents/
+data/bronze/dwd/historical/
 data/bronze/**/*.meta.json
 data/bronze/**/*.log
 data/bronze/**/.DS_Store

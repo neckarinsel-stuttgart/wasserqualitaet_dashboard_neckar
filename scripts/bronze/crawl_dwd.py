@@ -90,8 +90,9 @@ CATEGORIES = {
     "sun": "sun",  # sunshine duration
     "precipitation": "regen",  # keep legacy filename compatibility
 }
-ID_MIN = 4926
-ID_MAX = 4933
+# 4928 = Stuttgart (Schnarrenberg); 4931 is Echterdingen airport
+STATION_ID = int(os.getenv("DWD_STATION_ID") or "4928")
+HISTORY_START = "2023010100"
 
 # recents/ is created inside the bronze DWD folder
 RECENT_DIR = os.path.join(DATA_DIR, "recents")
@@ -449,34 +450,9 @@ def _clip_negative_numeric_values(
 # -----------------
 # Core update & aggregate
 # -----------------
-def update_category(cat: str, short: str) -> None:
-    # 'solar' usually has no 'recent' dir on DWD; fall back to folder root and filter *_row.zip
-    url = urljoin(BASE_URL, f"{cat}/recent/")
-    use_row_only = False
-    alt_url = urljoin(BASE_URL, f"{cat}/")
-    logger.info(f"Category start: {cat} ({short})")
-    logger.info(f"Primary URL: {url}")
-    logger.info(f"Download flags: force={DWD_FORCE_DOWNLOAD} check_remote={DWD_CHECK_REMOTE}")
-
-    try:
-        files = list_files(url)
-        if not files:
-            files = list_files(alt_url)
-            url = alt_url
-            use_row_only = True
-    except Exception:
-        try:
-            files = list_files(alt_url)
-            url = alt_url
-            use_row_only = True
-        except Exception:
-            logger.exception(f"Failed to list files for category: {cat}")
-            return
-
-    logger.info(f"Using URL: {url}")
-    logger.info(f"Zip candidates: {len(files)} (row_only={use_row_only})")
-
-    target_dir = os.path.join(RECENT_DIR, cat)
+def _collect_frames(
+    url: str, files: list[str], target_dir: str, use_row_only: bool
+) -> list[pd.DataFrame]:
     os.makedirs(target_dir, exist_ok=True)
 
     all_frames = []
@@ -492,7 +468,7 @@ def update_category(cat: str, short: str) -> None:
             skipped_row += 1
             continue
         sid = extract_id(file)
-        if sid is None or sid < ID_MIN or sid > ID_MAX:
+        if sid != STATION_ID:
             skipped_id += 1
             continue
 
@@ -539,6 +515,85 @@ def update_category(cat: str, short: str) -> None:
         skipped_other,
     )
 
+    return all_frames
+
+
+def _station_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if "STATIONS_ID" not in df.columns:
+        return df
+    return df[df["STATIONS_ID"].astype(str).str.strip() == str(STATION_ID)]
+
+
+def _needs_backfill(raw_path: str) -> bool:
+    if not os.path.exists(raw_path):
+        return True
+    try:
+        df = pd.read_csv(raw_path, sep=";", dtype=str)
+    except Exception:
+        logger.exception(f"Failed to read raw file for backfill check: {raw_path}")
+        return False
+    df = _station_rows(standardize_columns(df))
+    ts_col = pick_timestamp_column(df)
+    if ts_col is None or df.empty:
+        return True
+    first = pd.to_datetime(
+        df[ts_col].astype(str).str.strip().str.slice(0, 10), format="%Y%m%d%H", errors="coerce"
+    ).min()
+    history_start = pd.to_datetime(HISTORY_START, format="%Y%m%d%H")
+    return pd.isna(first) or first > history_start + pd.Timedelta(days=31)
+
+
+def _fetch_historical(cat: str) -> list[pd.DataFrame]:
+    url = urljoin(BASE_URL, f"{cat}/historical/")
+    try:
+        files = list_files(url)
+    except Exception:
+        logger.info(f"No historical archive for {cat}; skipping backfill")
+        return []
+    logger.info(f"Backfilling {cat} from {url}")
+    frames = _collect_frames(url, files, os.path.join(DATA_DIR, "historical", cat), False)
+    out = []
+    for df in frames:
+        ts_col = pick_timestamp_column(df)
+        if ts_col is not None:
+            df = df[df[ts_col].astype(str).str.strip().str.slice(0, 10) >= HISTORY_START]
+        out.append(df)
+    return out
+
+
+def update_category(cat: str, short: str) -> None:
+    # 'solar' usually has no 'recent' dir on DWD; fall back to folder root and filter *_row.zip
+    url = urljoin(BASE_URL, f"{cat}/recent/")
+    use_row_only = False
+    alt_url = urljoin(BASE_URL, f"{cat}/")
+    logger.info(f"Category start: {cat} ({short})")
+    logger.info(f"Primary URL: {url}")
+    logger.info(f"Download flags: force={DWD_FORCE_DOWNLOAD} check_remote={DWD_CHECK_REMOTE}")
+
+    try:
+        files = list_files(url)
+        if not files:
+            files = list_files(alt_url)
+            url = alt_url
+            use_row_only = True
+    except Exception:
+        try:
+            files = list_files(alt_url)
+            url = alt_url
+            use_row_only = True
+        except Exception:
+            logger.exception(f"Failed to list files for category: {cat}")
+            return
+
+    logger.info(f"Using URL: {url}")
+    logger.info(f"Zip candidates: {len(files)} (row_only={use_row_only})")
+
+    all_frames = _collect_frames(url, files, os.path.join(RECENT_DIR, cat), use_row_only)
+
+    raw_path = os.path.join(DATA_DIR, f"schnarrenberg_dwd_{short}.csv")
+    if _needs_backfill(raw_path):
+        all_frames += _fetch_historical(cat)
+
     if not all_frames:
         logger.warning(f"No data frames collected for category: {cat} ({short})")
         return
@@ -560,10 +615,9 @@ def update_category(cat: str, short: str) -> None:
         logger.info(f"De-duplicated using keys {keys}; rows now: {len(df_new):,}")
 
     # RAW file written into DATA_DIR (parent folder from .env)
-    raw_path = os.path.join(DATA_DIR, f"schnarrenberg_dwd_{short}.csv")
     if os.path.exists(raw_path):
         df_exist = pd.read_csv(raw_path, sep=";", dtype=str)
-        df_exist = standardize_columns(df_exist)
+        df_exist = _station_rows(standardize_columns(df_exist))
         df_new = pd.concat([df_exist, df_new], ignore_index=True)
         keys = [
             k
@@ -576,7 +630,7 @@ def update_category(cat: str, short: str) -> None:
     df_new.to_csv(raw_path, sep=";", index=False)
     logger.info(f"Wrote raw CSV: {raw_path} (rows={len(df_new):,})")
 
-    # CLEAN file also in DATA_DIR (NOT in recents/)
+    # CLEAN file also in DATA_DIR (NOT in recents/), rebuilt from the full raw history
     df_clean = fix_dates(df_new.copy())
     df_clean = rename_columns(df_clean)
     df_clean = remove_duplicate_columns(df_clean)
@@ -586,10 +640,6 @@ def update_category(cat: str, short: str) -> None:
     df_clean = _ensure_datetime_column(df_clean, "DATUM")
 
     clean_path = os.path.join(DATA_DIR, f"clean_schnarrenberg_dwd_{short}.csv")
-    if os.path.exists(clean_path):
-        df_exist = pd.read_csv(clean_path)
-        df_exist = _ensure_datetime_column(df_exist, "DATUM")
-        df_clean = pd.concat([df_exist, df_clean], ignore_index=True)
 
     if "DATUM" in df_clean.columns:
         before = len(df_clean)
