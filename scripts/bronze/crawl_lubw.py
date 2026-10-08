@@ -114,58 +114,60 @@ async def choose_kreise(page) -> None:
         except Exception:
             pass
 
-    async def _open_select2_dropdown() -> None:
-        # The search input exists in the DOM but is often hidden until the dropdown is opened.
-        try:
-            any_field = page.locator("input.select2-search__field").first
-            if await any_field.count():
-                described_by = await any_field.get_attribute("aria-describedby")
-                if described_by:
-                    await page.locator(f"#{described_by}").click(timeout=5000)
-                    return
-        except Exception:
-            pass
-
-        # Fallbacks: click the first available Select2 container/selection.
-        for sel in [
-            ".select2-container:visible",
-            "span.select2-selection:visible",
-            ".select2-selection--multiple:visible",
-            ".select2-selection--single:visible",
-            ".select2-container",
-            "span.select2-selection",
-        ]:
-            try:
-                loc = page.locator(sel).first
-                if await loc.count():
-                    await loc.scroll_into_view_if_needed(timeout=5000)
-                    await loc.click(timeout=5000)
-                    return
-            except Exception:
+    async def _kreis_field():
+        await page.wait_for_selector("input.select2-search__field:visible", timeout=30000)
+        fields = page.locator("input.select2-search__field:visible")
+        for i in range(await fields.count()):
+            label_id = await fields.nth(i).get_attribute("aria-labelledby")
+            if not label_id:
                 continue
+            label = page.locator(f"[id='{label_id}']")
+            if await label.count() and (await label.first.inner_text()).strip() == "Kreis":
+                return page.locator(
+                    f"input.select2-search__field[aria-labelledby='{label_id}']"
+                ).first
+        raise RuntimeError("Visible 'Kreis' filter not found on LUBW dashboard")
 
-    # Try a few times to ensure a *visible* select2 search field.
-    last_exc: BaseException | None = None
-    for _ in range(5):
-        try:
-            await _open_select2_dropdown()
-            await page.wait_for_selector("input.select2-search__field:visible", timeout=15000)
-            last_exc = None
-            break
-        except Exception as exc:
-            last_exc = exc
-            await page.wait_for_timeout(500)
-    if last_exc is not None:
-        raise last_exc
+    def _kreis_chip(field, kreis: str):
+        selection = field.locator(
+            "xpath=ancestor::*[contains(concat(' ', @class, ' '), ' select2-selection ')][1]"
+        )
+        return selection.locator(".select2-selection__choice", has_text=kreis)
 
+    attempts = 4
     for kreis in KREISE:
-        # Always use the visible field (there may be multiple hidden ones in the DOM).
-        field = page.locator("input.select2-search__field:visible").first
-        await field.click(timeout=10000)
-        await field.fill(kreis, timeout=10000)
-        await page.wait_for_selector(".select2-results__option", timeout=5000)
-        await page.locator(".select2-results__option", has_text=kreis).click()
-        await page.wait_for_timeout(400)
+        last_exc: BaseException | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                field = await _kreis_field()
+                if await _kreis_chip(field, kreis).count():
+                    last_exc = None
+                    break
+                await field.click(timeout=10000)
+                await field.fill(kreis, timeout=10000)
+                option = page.locator(".select2-results__option", has_text=kreis).first
+                await option.wait_for(state="visible", timeout=10000)
+                await option.click(timeout=10000)
+                await _kreis_chip(await _kreis_field(), kreis).first.wait_for(
+                    state="visible", timeout=15000
+                )
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                print(
+                    f"⚠️  Kreis '{kreis}' attempt {attempt}/{attempts} failed "
+                    f"({type(exc).__name__}). Retrying..."
+                )
+                try:
+                    await page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                await page.wait_for_timeout(1500)
+        if last_exc is not None:
+            raise last_exc
+        print(f"  ✔ {kreis}")
+        await page.wait_for_timeout(1000)
 
     print("✅ Kreise erfolgreich gewählt.")
 
@@ -204,17 +206,35 @@ async def set_datum_filter(page) -> None:
 
 async def export_csv(page) -> None:
     """Hovert über Spaltenkopf 'Parameter' und exportiert CSV."""
-    header = page.locator("th:has-text('Parameter')").first
-    await header.scroll_into_view_if_needed()
-    await header.hover()
-    await page.wait_for_timeout(500)
-
     export_btn = page.locator("button[aria-label='Exportieren']").first
-    await export_btn.wait_for(state="visible", timeout=4000)
-    await export_btn.click()
-
     csv_entry = page.locator("role=menuitem >> text=CSV-Datei").first
-    await csv_entry.wait_for(state="visible", timeout=4000)
+
+    attempts = 5
+    last_exc: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            header = page.locator("th:has-text('Parameter'):visible").first
+            await header.wait_for(state="visible", timeout=60000)
+            await header.hover(timeout=30000)
+            await page.wait_for_timeout(500)
+            await export_btn.wait_for(state="visible", timeout=10000)
+            await export_btn.click(timeout=10000)
+            await csv_entry.wait_for(state="visible", timeout=10000)
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"⚠️  Export menu attempt {attempt}/{attempts} failed "
+                f"({type(exc).__name__}). Retrying..."
+            )
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            await page.wait_for_timeout(3000)
+    if last_exc is not None:
+        raise last_exc
 
     download_timeout_ms = int(os.getenv("LUBW_DOWNLOAD_TIMEOUT_MS") or "180000")
     export_retries = int(os.getenv("LUBW_EXPORT_RETRIES") or "2")
@@ -275,16 +295,26 @@ def main(headless: bool = True) -> None:
 
     error: list[BaseException] = []
 
+    run_attempts = max(1, int(os.getenv("LUBW_RUN_ATTEMPTS") or "3"))
+
     def runner() -> None:
-        try:
-            if os.name == "nt":
-                try:
-                    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-                except Exception:
-                    pass
-            asyncio.run(main_async(headless=headless))
-        except BaseException as exc:
-            error.append(exc)
+        if os.name == "nt":
+            try:
+                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            except Exception:
+                pass
+        for attempt in range(1, run_attempts + 1):
+            try:
+                asyncio.run(main_async(headless=headless))
+                return
+            except BaseException as exc:
+                if attempt >= run_attempts or isinstance(exc, KeyboardInterrupt):
+                    error.append(exc)
+                    return
+                print(
+                    f"⚠️  LUBW run attempt {attempt}/{run_attempts} failed "
+                    f"({type(exc).__name__}: {str(exc).splitlines()[0][:200]}). Retrying..."
+                )
 
     t = threading.Thread(target=runner, name="lubw_playwright")
     t.start()

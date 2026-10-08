@@ -1,9 +1,8 @@
-# Shared runtime deps for docker-compose services.
-# Installed on container startup (see docker-compose.yml).
+# Shared runtime deps for the crawler image.
 
 # Internal package (provides numpy/pandas/python-dotenv and (via extra) FastAPI bits)
 ./pipeline[api]
 
 # Crawlers
 requests>=2.31
-playwright>=1.44
+playwright==1.46.0

@@ -28,14 +28,10 @@ services:
       - .env
     volumes:
       - ./data:/app/data
-      - ./requirements.txt:/app/requirements.txt:ro
       - ./scripts:/app/scripts:ro
     command:
-      - sh
-      - -c
-      - >-
-        pip install --no-cache-dir -r /app/requirements.txt
-        && python scripts/bronze/crawl_dwd.py
+      - python
+      - scripts/bronze/crawl_dwd.py
 
   crawl_lubw:
     build:
@@ -49,17 +45,13 @@ services:
       # Optional tuning
       LUBW_EXPORT_RETRIES: "3"
       LUBW_DOWNLOAD_TIMEOUT_MS: "120000"
+      LUBW_RUN_ATTEMPTS: "3"
     volumes:
       - ./data:/app/data
-      - ./requirements.txt:/app/requirements.txt:ro
       - ./scripts:/app/scripts:ro
     command:
-      - sh
-      - -c
-      - >-
-        pip install --no-cache-dir -r /app/requirements.txt
-        && python -m playwright install chromium
-        && python scripts/bronze/crawl_lubw.py
+      - python
+      - scripts/bronze/crawl_lubw.py
 
   pipeline:
     build:
