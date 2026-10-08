@@ -87,6 +87,72 @@ def _impute_small_gaps_mean_of_neighbors(
     return out
 
 
+LUBW_STATION_PREFIX = "Hofen"
+LUBW_PARAMS = {"Trübung": "turb", "Leitfähigkeit": "cond", "Sauerstoff": "o2", "Temperatur": "wtemp"}
+
+
+def _load_lubw_daily(lubw_path: Path) -> pd.DataFrame | None:
+    if not lubw_path.exists():
+        return None
+    raw = pd.read_csv(lubw_path, sep=";", encoding="utf-8-sig", dtype=str)
+    raw = raw[raw["Messstation"].astype(str).str.startswith(LUBW_STATION_PREFIX)].copy()
+    if raw.empty:
+        return None
+    raw["date"] = pd.to_datetime(raw["Datum"], dayfirst=True, errors="coerce")
+    raw["value"] = pd.to_numeric(
+        raw["Tagesmittelwert"].str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        errors="coerce",
+    )
+    raw["param"] = raw["Parameter"].map(
+        lambda s: next((v for k, v in LUBW_PARAMS.items() if k in str(s)), None)
+    )
+    raw = raw.dropna(subset=["date", "param"])
+    return raw.pivot_table(index="date", columns="param", values="value", aggfunc="mean").sort_index()
+
+
+def _domain_features(
+    weather_numeric: pd.DataFrame, days: pd.DatetimeIndex, lubw_path: Path
+) -> pd.DataFrame:
+    """Rain/sun/air-temp windows ending 23:00 of each day plus LUBW Neckar (Hofen) daily values."""
+
+    hourly = weather_numeric[~weather_numeric.index.duplicated(keep="last")].sort_index().asfreq("h")
+    at = days + pd.Timedelta(hours=23)
+
+    def roll(col: str, hours: int, how: str) -> np.ndarray:
+        if col not in hourly.columns:
+            return np.full(len(days), np.nan)
+        rolled = getattr(hourly[col].rolling(hours, min_periods=max(1, hours // 2)), how)()
+        return rolled.reindex(at).to_numpy()
+
+    out = pd.DataFrame(index=days)
+    out["dom_rain_24h"] = roll("R1", 24, "sum")
+    out["dom_rain_48h"] = roll("R1", 48, "sum")
+    out["dom_rain_72h"] = roll("R1", 72, "sum")
+    out["dom_rain_7d"] = roll("R1", 168, "sum")
+    out["dom_rain_max1h_72h"] = roll("R1", 72, "max")
+    out["dom_sun_72h"] = roll("SD_SO", 72, "sum")
+    out["dom_airtemp_72h"] = roll("TT_TU", 72, "mean")
+    # Season of the day being predicted (features of day D feed the label of D+1)
+    doy = (days + pd.Timedelta(days=1)).dayofyear.to_numpy()
+    out["dom_doy_sin"] = np.sin(2 * np.pi * doy / 365.25)
+    out["dom_doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
+
+    lubw = _load_lubw_daily(lubw_path)
+    lw = (lubw if lubw is not None else pd.DataFrame()).reindex(
+        pd.date_range(days.min() - pd.Timedelta(days=7), days.max(), freq="D")
+    )
+    for param in ["turb", "cond", "o2", "wtemp"]:
+        series = lw[param] if param in lw.columns else pd.Series(np.nan, index=lw.index)
+        out[f"dom_{param}_d1"] = series.ffill(limit=1).reindex(days).to_numpy()
+    turb = lw["turb"] if "turb" in lw.columns else pd.Series(np.nan, index=lw.index)
+    cond = lw["cond"] if "cond" in lw.columns else pd.Series(np.nan, index=lw.index)
+    out["dom_turb_max3d"] = turb.rolling(3, min_periods=1).max().reindex(days).to_numpy()
+    out["dom_cond_drop7d"] = (
+        cond.rolling(7, min_periods=3).mean().reindex(days).to_numpy() - out["dom_cond_d1"].to_numpy()
+    )
+    return out
+
+
 def build_daily_gold_dataset(
     paths: PathConfig,
     *,
@@ -190,6 +256,12 @@ def build_daily_gold_dataset(
             features[f"{col}_7d"] = features[col].rolling(7, min_periods=1).mean()
         features[f"{col}_lag1"] = features[col].shift(1)
         features[f"{col}_lag7"] = features[col].shift(7)
+
+    features = features.join(
+        _domain_features(
+            weather_numeric, features.index, paths.bronze_lubw_dir / "lubw_download_latest.csv"
+        )
+    )
 
     features_for_labels = features.shift(shift_days)
 

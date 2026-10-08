@@ -13,6 +13,7 @@ from ni_ai_pipeline.steps.gold_stuttgart_weather import pull_stuttgart_weather_h
 from ni_ai_pipeline.steps.silver_messungen import build_messungen_komplett
 from ni_ai_pipeline.steps.silver_weather import build_silver_weather
 from ni_ai_pipeline.training.daily_prediction import predict_latest_and_upsert
+from ni_ai_pipeline.training.ecoli_domain_model import train_ecoli_domain
 from ni_ai_pipeline.training.ecoli_predictability import TRAINING_START_DATE
 from ni_ai_pipeline.training.ecoli_predictability import load_model_metadata
 from ni_ai_pipeline.training.ecoli_predictability import train_ecoli_predictability
@@ -99,7 +100,7 @@ def _ensure_classifier_artifacts(
             "Model artifacts missing or stale for current data; training before prediction "
             f"({model_path}, {model_metadata_path})."
         )
-        train_ecoli_predictability(paths)
+        train_ecoli_domain(paths)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -112,6 +113,7 @@ def _parse_args() -> argparse.Namespace:
     sub.add_parser("gold-data-full", help="Build Gold hourly dataset data_full.csv")
     sub.add_parser("gold-masterdata", help="Aggregate data_full.csv to daily masterdata.csv")
     sub.add_parser("gold-daily-dataset", help="Build daily-grain dataset for modeling")
+    sub.add_parser("train-ecoli-domain", help="Train the production domain-feature E. coli model")
 
     stuttgart_weather = sub.add_parser(
         "stuttgart-weather-hourly",
@@ -302,6 +304,10 @@ def main() -> int:
 
     if args.cmd == "gold-daily-dataset":
         build_daily_gold_dataset(paths)
+        return 0
+
+    if args.cmd == "train-ecoli-domain":
+        train_ecoli_domain(paths)
         return 0
 
     if args.cmd == "stuttgart-weather-hourly":
