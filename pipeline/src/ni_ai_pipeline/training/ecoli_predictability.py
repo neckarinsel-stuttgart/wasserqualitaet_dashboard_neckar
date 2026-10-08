@@ -13,8 +13,8 @@ import pandas as pd
 
 from ni_ai_pipeline.paths import PathConfig
 
-# 2024 samples were analysed by a different lab; train on homogeneous data only
-TRAINING_START_DATE = os.getenv("TRAINING_START_DATE", "2025-01-01")
+# Optional lower bound for training rows, e.g. "2025-01-01" to skip 2024 (different lab)
+TRAINING_START_DATE = os.getenv("TRAINING_START_DATE") or None
 
 
 def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
