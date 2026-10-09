@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,47 @@ from ni_ai_pipeline.training.ecoli_predictability import (
     load_saved_model,
     predict_with_saved_model,
 )
+
+
+RAIN_OVERRIDE_MM = float(os.getenv("RAIN_OVERRIDE_MM") or "2.0")
+RAIN_OVERRIDE_MIN_HOURS = 20
+
+
+def apply_rain_override(paths: PathConfig, *, predictions_path: Path | None = None) -> int:
+    """Switch past 'safe' predictions to unsafe once that day's observed rain exceeds RAIN_OVERRIDE_MM.
+
+    The model only sees rain up to the evening before; this corrects days in retrospect.
+    """
+
+    predictions_path = predictions_path or (paths.gold_datasets_dir / "predictions.csv")
+    weather_path = paths.silver_weather_dir / "clean_wetter_komplett.csv"
+    if not predictions_path.exists() or not weather_path.exists():
+        return 0
+
+    weather = pd.read_csv(weather_path, index_col=0, parse_dates=True, low_memory=False)
+    if "R1" not in weather.columns:
+        return 0
+    rain = pd.to_numeric(weather["R1"], errors="coerce")
+    daily = rain.resample("D").agg(["sum", "count"])
+    rain_by_day = daily.loc[daily["count"] >= RAIN_OVERRIDE_MIN_HOURS, "sum"]
+
+    table = pd.read_csv(predictions_path)
+    days = pd.to_datetime(table["prediction_date"], errors="coerce").dt.normalize()
+    table["rain_mm_day"] = days.map(rain_by_day).round(1)
+    if "rain_override" not in table.columns:
+        table["rain_override"] = False
+    table["rain_override"] = table["rain_override"].astype(str).str.strip().str.lower().eq("true")
+
+    safe = table["prediction"].apply(_coerce_prediction_value_to_bool)
+    flip = safe & (table["rain_mm_day"] > RAIN_OVERRIDE_MM)
+    table.loc[flip, "prediction"] = False
+    table.loc[flip, "rain_override"] = True
+    table["prediction"] = table["prediction"].apply(_coerce_prediction_value_to_bool)
+    table.to_csv(predictions_path, index=False)
+
+    if flip.any():
+        print(f"Rain override: {int(flip.sum())} day(s) switched to unsafe (> {RAIN_OVERRIDE_MM} mm)")
+    return int(flip.sum())
 
 
 def _format_midnight_timestamp(value: object) -> str:
@@ -192,4 +234,5 @@ def predict_latest_and_upsert(
     table.to_csv(predictions_path, index=False)
 
     print(f"Wrote: {predictions_path}")
+    apply_rain_override(paths, predictions_path=predictions_path)
     return predictions_path
