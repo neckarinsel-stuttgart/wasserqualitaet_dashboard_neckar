@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 
 from ni_ai_pipeline.api_payloads import build_last_30d_plot_payload_json
+from ni_ai_pipeline.model_registry import read_latest_model_version
 from ni_ai_pipeline.paths import PathConfig, get_paths
 
 
@@ -760,12 +761,14 @@ def create_app() -> FastAPI:
         if "target" in latest.index:
             payload["target"] = _normalize_prediction_target_label(latest["target"])
 
-        return _add_day_after_prediction_fields(
+        payload = _add_day_after_prediction_fields(
             payload,
             paths=paths,
             prediction_date=pd.Timestamp(latest["prediction_date"]),
             prediction_bool=prediction_bool,
         )
+        payload["model"] = read_latest_model_version(paths)
+        return payload
 
     @app.get("/get_current_weather")
     def get_current_weather() -> dict[str, Any]:

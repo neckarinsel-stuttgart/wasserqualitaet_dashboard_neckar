@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ni_ai_pipeline.model_registry import append_model_version
 from ni_ai_pipeline.paths import PathConfig
 from ni_ai_pipeline.training.ecoli_predictability import TRAINING_START_DATE
 
@@ -147,6 +148,11 @@ def train_ecoli_domain(paths: PathConfig) -> PriorShiftedWarningModel:
         "training_max_date": df["date"].max().strftime("%Y-%m-%d"),
         "trained_at_utc": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds"),
     }
+    metadata["model_version"] = append_model_version(
+        paths,
+        trained_at=metadata["trained_at_utc"],
+        training_data_until=metadata["training_max_date"],
+    )
     (out / "ecoli_model_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     pd.DataFrame(
