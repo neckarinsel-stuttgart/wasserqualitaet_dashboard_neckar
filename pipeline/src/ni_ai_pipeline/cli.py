@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +18,10 @@ from ni_ai_pipeline.training.ecoli_domain_model import train_ecoli_domain
 from ni_ai_pipeline.training.ecoli_predictability import TRAINING_START_DATE
 from ni_ai_pipeline.training.ecoli_predictability import load_model_metadata
 from ni_ai_pipeline.training.ecoli_predictability import train_ecoli_predictability
+from ni_ai_pipeline.winter_break import winter_break_status
+
+# Exit code of `winter-break --check` when no break is active (0 = break active).
+WINTER_BREAK_INACTIVE_EXIT = 3
 
 
 def _needs_classifier_retrain(model_path: Path, model_metadata_path: Path) -> bool:
@@ -263,6 +268,16 @@ def _parse_args() -> argparse.Namespace:
         help="Append rows only; do not upsert existing site/date/target entries",
     )
 
+    winter = sub.add_parser(
+        "winter-break",
+        help="Print the current/next winter break from data/config/winter_break.json",
+    )
+    winter.add_argument(
+        "--check",
+        action="store_true",
+        help=f"Exit 0 if a winter break is active today, {WINTER_BREAK_INACTIVE_EXIT} otherwise",
+    )
+
     sub.add_parser("run-all", help="Run Silver + Gold + (optional) training")
     sub.add_parser(
         "run-daily-midnight",
@@ -364,6 +379,13 @@ def main() -> int:
             horizon_days=args.horizon_days,
             upsert=(not args.append_only),
         )
+        return 0
+
+    if args.cmd == "winter-break":
+        status = winter_break_status(paths)
+        print(json.dumps(status))
+        if args.check and not status["active"]:
+            return WINTER_BREAK_INACTIVE_EXIT
         return 0
 
     if args.cmd == "run-all":

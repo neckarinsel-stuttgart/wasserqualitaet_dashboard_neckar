@@ -20,6 +20,14 @@ if command -v docker >/dev/null 2>&1; then
   fi
 
   if [[ -n "$COMPOSE_CMD" ]]; then
+    # Winter break (data/config/winter_break.json): skip all updates.
+    # Set NI_IGNORE_WINTER_BREAK=1 to force a run. If the check itself fails, run as usual.
+    if [[ "${NI_IGNORE_WINTER_BREAK:-0}" != "1" ]] \
+      && $COMPOSE_CMD run --rm --no-deps -T pipeline ni-ai-pipeline winter-break --check; then
+      echo "$(date -Is) winter break active, skipping refresh"
+      exit 0
+    fi
+
     $COMPOSE_CMD run --rm --no-deps crawl_dwd
     $COMPOSE_CMD run --rm --no-deps crawl_lubw
     exec $COMPOSE_CMD run --rm --no-deps pipeline ni-ai-pipeline run-api-refresh
@@ -33,6 +41,12 @@ elif [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
   PYTHON="$REPO_ROOT/.venv/bin/python3"
 else
   PYTHON="/usr/bin/python3"
+fi
+
+if [[ "${NI_IGNORE_WINTER_BREAK:-0}" != "1" ]] \
+  && "$PYTHON" -m ni_ai_pipeline.cli winter-break --check; then
+  echo "$(date -Is) winter break active, skipping refresh"
+  exit 0
 fi
 
 "$PYTHON" "$REPO_ROOT/scripts/bronze/crawl_dwd.py"

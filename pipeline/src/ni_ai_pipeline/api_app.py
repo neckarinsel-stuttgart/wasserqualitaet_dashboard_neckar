@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, Response
 from ni_ai_pipeline.api_payloads import build_last_30d_plot_payload_json
 from ni_ai_pipeline.model_registry import read_latest_model_version
 from ni_ai_pipeline.paths import PathConfig, get_paths
+from ni_ai_pipeline.winter_break import winter_break_status
 
 
 TEMP_REQUESTED: list[str] = [
@@ -768,7 +769,22 @@ def create_app() -> FastAPI:
             prediction_bool=prediction_bool,
         )
         payload["model"] = read_latest_model_version(paths)
+        try:
+            payload["winter_break"] = winter_break_status(paths)
+        except Exception:
+            payload["winter_break"] = None
         return payload
+
+    @app.get("/get_winter_break")
+    @app.get("/get-winter-break")
+    def get_winter_break() -> dict[str, Any]:
+        """Return the current winter break (active) or the next upcoming one."""
+
+        paths = get_paths(load_dotenv=True)
+        try:
+            return winter_break_status(paths)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/get_current_weather")
     def get_current_weather() -> dict[str, Any]:
