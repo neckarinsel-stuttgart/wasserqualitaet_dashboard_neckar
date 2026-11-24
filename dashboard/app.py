@@ -5,12 +5,14 @@ from datetime import datetime
 from functools import partial
 from zoneinfo import ZoneInfo
 
+import files
+import important
 import pandas as pd
 import streamlit as st
 
-import files
-
 TZ = ZoneInfo("Europe/Berlin")
+IMPORTANT = "wichtig"
+LABELS = {IMPORTANT: ":material/star: Wichtige Dateien"}
 
 
 def human_size(size: float) -> str:
@@ -23,6 +25,39 @@ def human_size(size: float) -> str:
 
 def go_to(rel: str) -> None:
     st.session_state["folder"] = rel
+
+
+def open_folder(layer: str, rel: str) -> None:
+    st.query_params.clear()
+    st.session_state["layer"] = layer
+    st.session_state["folder"] = rel
+
+
+def open_file(link: str) -> None:
+    st.query_params["datei"] = link
+
+
+def close_file() -> None:
+    st.query_params.clear()
+
+
+def when(mtime: float) -> str:
+    return datetime.fromtimestamp(mtime, TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def download_button(layer: str, entry: files.Entry) -> None:
+    if entry.size > files.MAX_DOWNLOAD_BYTES:
+        st.caption("Zu groß für den Download")
+        return
+    st.download_button(
+        f"Herunterladen ({human_size(entry.size)})",
+        data=partial(files.read_download, layer, entry.rel),  # read only when clicked
+        file_name=entry.name,
+        mime="application/octet-stream",
+        icon=":material/download:",
+        on_click="ignore",
+        key=f"download:{layer}:{entry.rel}",
+    )
 
 
 def breadcrumbs(layer: str, folder: str) -> None:
@@ -73,31 +108,91 @@ def show_preview(layer: str, entry: files.Entry) -> None:
 
 def show_file(layer: str, entry: files.Entry) -> None:
     st.subheader(entry.name)
-    if entry.size > files.MAX_DOWNLOAD_BYTES:
-        st.warning("Die Datei ist zu groß für den Download.")
-    else:
-        st.download_button(
-            f"Herunterladen ({human_size(entry.size)})",
-            data=partial(files.read_download, layer, entry.rel),  # read only when clicked
-            file_name=entry.name,
-            mime="application/octet-stream",
-            icon=":material/download:",
-            on_click="ignore",
-            key=f"download:{layer}:{entry.rel}",
-        )
+    download_button(layer, entry)
     try:
         show_preview(layer, entry)
     except (files.FileAccessError, OSError):
         st.warning("Datei ist leer, nicht lesbar oder wird gerade aktualisiert. Bitte neu laden.")
 
 
+def linked_entry(link: str) -> tuple[str, files.Entry]:
+    layer, _, rel = link.partition("/")
+    path = files.file_path(layer, rel)
+    stat = path.stat()
+    return layer, files.Entry(path.name, rel, False, stat.st_size, stat.st_mtime)
+
+
+def show_linked_file(link: str) -> None:
+    st.button("Zurück", key="back", on_click=close_file, icon=":material/arrow_back:")
+    try:
+        layer, entry = linked_entry(link)
+    except (files.FileAccessError, OSError):
+        st.error("Diese Datei gibt es nicht.")
+        return
+    st.caption(
+        f"{link} · geändert {when(entry.mtime)} · Link zu dieser Ansicht: Adresszeile kopieren"
+    )
+    show_file(layer, entry)
+
+
+def show_important() -> None:
+    st.markdown(important.OVERVIEW)
+    for group in important.GROUPS:
+        st.subheader(f"{group.title}", anchor=False)
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.markdown(f"{group.icon} {group.intro}")
+            st.button(
+                "Ordner öffnen",
+                key=f"folder:{'/'.join(group.folder)}",
+                on_click=open_folder,
+                args=group.folder,
+                icon=":material/folder:",
+            )
+        for item in group.items:
+            found = important.resolve(item)
+            if not found:
+                st.caption(f"{item.pattern}: zurzeit nicht vorhanden")
+            for entry in found:
+                link = f"{item.layer}/{entry.rel}"
+                with st.container(border=True):
+                    text, actions = st.columns([3, 2], vertical_alignment="center")
+                    text.markdown(f"`{entry.name}`")
+                    text.markdown(item.text)
+                    text.caption(f"{link} · geändert {when(entry.mtime)}")
+                    with actions.container(horizontal=True, horizontal_alignment="right"):
+                        st.button(
+                            "Ansehen",
+                            key=f"open:{link}",
+                            on_click=open_file,
+                            args=(link,),
+                            icon=":material/visibility:",
+                        )
+                        download_button(item.layer, entry)
+
+
 def main() -> None:
     st.set_page_config(page_title="Neckarinsel Daten", page_icon=":material/water:", layout="wide")
     st.title("Neckarinsel Daten")
 
+    if "datei" in st.query_params:
+        show_linked_file(st.query_params["datei"])
+        return
+
+    st.session_state.setdefault("layer", IMPORTANT)
     layer = st.segmented_control(
-        "Ebene", files.LAYERS, default="gold", required=True, key="layer", on_change=go_to, args=("",)
+        "Ebene",
+        (IMPORTANT, *files.LAYERS),
+        required=True,
+        key="layer",
+        format_func=lambda name: LABELS.get(name, name),
+        on_change=go_to,
+        args=("",),
+        persist_state="page",
     )
+    if layer == IMPORTANT:
+        show_important()
+        return
+
     left, right = st.columns([3, 1], vertical_alignment="bottom")
     query = left.text_input("Dateiname filtern", placeholder="z. B. predictions")
     show_raw = right.toggle("Rohdateien anzeigen", help="Logs, Metadaten, historical/ und recents/")
@@ -150,7 +245,9 @@ def main() -> None:
     if selected and selected[0] < len(shown):
         show_file(layer, shown[selected[0]])
     else:
-        st.caption("Datei in der Tabelle ganz links markieren, um sie anzusehen oder herunterzuladen.")
+        st.caption(
+            "Datei in der Tabelle ganz links markieren, um sie anzusehen oder herunterzuladen."
+        )
 
 
 main()

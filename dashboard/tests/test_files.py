@@ -25,7 +25,15 @@ def root(tmp_path):
 
 @pytest.mark.parametrize(
     "rel",
-    ["..", "../config/secret.json", "dwd/../../config", "/etc/passwd", "C:/x", "..\\config", "a\x00b"],
+    [
+        "..",
+        "../config/secret.json",
+        "dwd/../../config",
+        "/etc/passwd",
+        "C:/x",
+        "..\\config",
+        "a\x00b",
+    ],
 )
 def test_traversal_is_rejected(root, rel):
     with pytest.raises(files.FileAccessError):

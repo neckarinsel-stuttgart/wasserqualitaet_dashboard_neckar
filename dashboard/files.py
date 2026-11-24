@@ -216,4 +216,6 @@ def preview_zip(layer: str, rel: str, root: Path | None = None) -> pd.DataFrame:
             infos = z.infolist()[:MAX_ZIP_ENTRIES]
     except (OSError, zipfile.BadZipFile) as exc:
         raise FileAccessError("Archive cannot be read") from exc
-    return pd.DataFrame({"Datei": [i.filename for i in infos], "Bytes": [i.file_size for i in infos]})
+    return pd.DataFrame(
+        {"Datei": [i.filename for i in infos], "Bytes": [i.file_size for i in infos]}
+    )
