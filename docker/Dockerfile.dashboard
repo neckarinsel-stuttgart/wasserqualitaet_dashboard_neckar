@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+
+WORKDIR /app/dashboard
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+COPY dashboard/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY dashboard/app.py dashboard/files.py ./
+
+RUN useradd --create-home --uid 10001 dashboard
+USER dashboard
+
+CMD ["streamlit", "run", "app.py", \
+     "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true", \
+     "--server.fileWatcherType=none", "--browser.gatherUsageStats=false", \
+     "--client.showErrorDetails=none", "--client.toolbarMode=minimal"]

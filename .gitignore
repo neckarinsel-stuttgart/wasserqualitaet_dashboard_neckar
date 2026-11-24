@@ -39,3 +39,6 @@ data/bronze/**/.DS_Store
 scripts/gold/temp_plot.png
 scripts/gold/rest_plot.png
 DEPLOYMENT.md
+
+# Dashboard logins (password hashes)
+caddy/private/

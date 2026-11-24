@@ -71,3 +71,54 @@ services:
     command:
       - ni-ai-pipeline
       - run-api-refresh
+
+  # Read-only data browser (bronze/silver/gold). Reachable only through caddy.
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    volumes:
+      - ./data/bronze:/data/bronze:ro
+      - ./data/silver:/data/silver:ro
+      - ./data/gold:/data/gold:ro
+    environment:
+      DATA_ROOT: /data
+    mem_limit: 350m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8501/_stcore/health', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 60s
+
+  # Login (and HTTPS once a hostname is set) in front of the dashboard.
+  caddy:
+    image: caddy:2-alpine
+    env_file:
+      - path: caddy/private/host.env
+        required: false
+    depends_on:
+      - dashboard
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - caddy_data:/data
+    mem_limit: 64m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+volumes:
+  caddy_data:

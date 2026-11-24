@@ -1,0 +1,28 @@
+{
+	admin off
+	# Browsers send no SNI for IP addresses.
+	default_sni {$DASHBOARD_HOST}
+}
+
+https://{$DASHBOARD_HOST} {
+	tls {
+		issuer acme {
+			# Let's Encrypt only issues IP certificates as short-lived ones (about 6 days).
+			profile shortlived
+		}
+	}
+
+	log
+
+	# Contains the basic_auth block. Caddy refuses to start if this file is missing.
+	import /etc/caddy/private/users.caddy
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	reverse_proxy dashboard:8501
+}
